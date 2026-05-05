@@ -10,6 +10,7 @@ enum UserRole {
   DOCTOR
   ADMIN
   PATIENT
+  NURSE
 }
 
 enum OAuthProvider {
@@ -31,14 +32,17 @@ model User {
   doctorProfile DoctorProfile?
   adminProfile  AdminProfile?
   patientProfile PatientProfile?
+  nurseProfile  NurseProfile?
 
   refreshTokens      RefreshToken[]
   consultationSessionsAsDoctor  ConsultationSession[]      @relation("ConsultationSessionDoctor")
   consultationSessionsAsPatient ConsultationSession[]      @relation("ConsultationSessionPatient")
   consultationSessionsCreated   ConsultationSession[]      @relation("ConsultationSessionCreatedBy")
+  consultationSessionsAsNurse   ConsultationSession[]      @relation("ConsultationSessionNurse")
   consultationSessionAudits     ConsultationSessionAudit[] @relation("ConsultationSessionActor")
   consultationNotesAsDoctor  ConsultationNote[] @relation("ConsultationNoteDoctor")
   consultationNotesAsPatient ConsultationNote[] @relation("ConsultationNotePatient")
+  consultationNotesAsNurse   ConsultationNote[] @relation("ConsultationNoteNurse")
   oauthAccounts      OauthAccount[]
   authAuditLogs      AuthAuditLog[]
   pendingEmailChanges PendingEmailChange[]
@@ -106,6 +110,25 @@ model PatientProfile {
   updatedAt DateTime @updatedAt
 }
 
+model NurseProfile {
+  id       String @id @default(uuid())
+  userId   String @unique
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  fullName String
+  email    String @unique
+  phone    String @unique
+  passwordHash String?
+
+  nurseId  String @unique
+  profilePicture String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([nurseId])
+}
+
 model OauthAccount {
   id              String        @id @default(uuid())
   userId          String
@@ -158,6 +181,7 @@ model PendingRegistration {
 
   license  String?
   adminId  String?
+  nurseId  String?
   bornDate DateTime?
 
   tokenHash String  @unique
@@ -178,6 +202,12 @@ model LicenseWhitelist {
 model AdminIdWhitelist {
   id        String   @id @default(uuid())
   adminId   String   @unique
+  createdAt DateTime @default(now())
+}
+
+model NurseIdWhitelist {
+  id        String   @id @default(uuid())
+  nurseId   String   @unique
   createdAt DateTime @default(now())
 }
 
@@ -260,6 +290,9 @@ model ConsultationSession {
   createdBy      String @map("created_by")
   createdByAdmin User   @relation("ConsultationSessionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
 
+  nurseId   String? @map("nurse_id")
+  nurse     User?   @relation("ConsultationSessionNurse", fields: [nurseId], references: [id], onDelete: SetNull)
+
   // Twilio technical data retained from old Consultation + CallSession.
   roomName      String  @unique @map("room_name")
   twilioRoomSid String? @unique @map("twilio_room_sid")
@@ -274,6 +307,9 @@ model ConsultationSession {
   patientCity        String? @map("patient_city")
   patientLatitude    Float?  @map("patient_latitude")
   patientLongitude   Float?  @map("patient_longitude")
+
+  nurseJoinedAt   DateTime? @map("nurse_joined_at")
+  nurseIdentity   String?   @map("nurse_identity")
 
   doctorJoinedAt  DateTime? @map("doctor_joined_at")
   patientJoinedAt DateTime? @map("patient_joined_at")
@@ -303,12 +339,14 @@ model ConsultationSession {
 
   @@index([doctorId])
   @@index([patientId])
+  @@index([nurseId])
   @@index([createdBy])
   @@index([sessionStatus])
   @@index([scheduledStartTime])
   @@index([scheduledEndTime])
   @@index([doctorId, scheduledStartTime])
   @@index([patientId, scheduledStartTime])
+  @@index([nurseId, scheduledStartTime])
   @@map("ConsultationSession")
 }
 
@@ -322,6 +360,9 @@ model ConsultationNote {
 
   patientId String  @map("patient_id")
   patient   User    @relation("ConsultationNotePatient", fields: [patientId], references: [id], onDelete: Restrict)
+
+  nurseId String? @map("nurse_id")
+  nurse   User?   @relation("ConsultationNoteNurse", fields: [nurseId], references: [id], onDelete: SetNull)
 
   transcriptRaw String?
   summary       String?
@@ -346,6 +387,7 @@ model ConsultationNote {
 
   @@index([doctorId])
   @@index([patientId])
+  @@index([nurseId])
   @@index([doctorId, createdAt(sort: Desc)])
   @@index([patientId, createdAt(sort: Desc)])
   @@index([consultationSessionId])

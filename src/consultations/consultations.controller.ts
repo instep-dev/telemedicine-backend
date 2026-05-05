@@ -70,6 +70,15 @@ export class ConsultationsController {
     return this.consultations.listPatientSessions(req.user.id, query);
   }
 
+  @Get('sessions/nurse')
+  async listNurseSessions(
+    @Req() req: any,
+    @Query() query: ListConsultationSessionsQueryDto,
+  ) {
+    this.requireRole(req.user.role, UserRole.NURSE);
+    return this.consultations.listNurseSessions(req.user.id, query);
+  }
+
   @Get('sessions/:sessionId')
   async getSession(@Req() req: any, @Param('sessionId') sessionId: string) {
     if (req.user.role === UserRole.ADMIN) {
@@ -80,6 +89,9 @@ export class ConsultationsController {
     }
     if (req.user.role === UserRole.PATIENT) {
       return this.consultations.getSessionForPatient(req.user.id, sessionId);
+    }
+    if (req.user.role === UserRole.NURSE) {
+      return this.consultations.getSessionForNurse(req.user.id, sessionId);
     }
     throw new ForbiddenException('Role tidak diizinkan');
   }
@@ -100,5 +112,11 @@ export class ConsultationsController {
   async listPatients(@Req() req: any) {
     this.requireRole(req.user.role, UserRole.ADMIN);
     return this.consultations.listPatientOptions(req.user.id);
+  }
+
+  @Get('lookups/nurses')
+  async listNurses(@Req() req: any) {
+    this.requireRole(req.user.role, UserRole.ADMIN);
+    return this.consultations.listNurseOptions(req.user.id);
   }
 }

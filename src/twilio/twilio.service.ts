@@ -225,6 +225,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       where: { consultationSessionId: updated.sessionId },
       update: {
         doctorId: session.doctorId,
+        nurseId: session.nurseId ?? null,
         aiStatus: 'PENDING',
         aiError: null,
       },
@@ -232,6 +233,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
         consultationSessionId: updated.sessionId,
         doctorId: session.doctorId,
         patientId: session.patientId,
+        nurseId: session.nurseId ?? null,
         aiStatus: 'PENDING',
         aiError: null,
       },
@@ -390,21 +392,6 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     this.assertJoinWindow(session);
 
-    if (session.doctorJoinedAt) {
-      await this.consultationsService.createAudit({
-        consultationSessionId: session.sessionId,
-        action: 'DOCTOR_JOIN_DENIED',
-        actorUserId: doctorId,
-        actorRole: UserRole.DOCTOR,
-        previousStatus: session.sessionStatus,
-        newStatus: session.sessionStatus,
-        metadata: {
-          reason: 'DOCTOR_ALREADY_JOINED',
-        },
-      });
-      throw new ForbiddenException('Dokter sudah join pada session ini');
-    }
-
     const identity = session.doctor.twilioIdentity;
     if (!identity) {
       throw new BadRequestException('Twilio identity dokter belum tersedia');
@@ -413,13 +400,14 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     await this.ensureRoom(session);
 
     const now = new Date();
+    const isRejoin = !!session.doctorJoinedAt;
     const startedAt = !session.startedAt && session.patientJoinedAt ? now : session.startedAt;
 
     await this.prisma.consultationSession.update({
       where: { sessionId: session.sessionId },
       data: {
         doctorIdentity: identity,
-        doctorJoinedAt: now,
+        doctorJoinedAt: session.doctorJoinedAt ?? now,
         sessionStatus: 'IN_CALL',
         startedAt: startedAt ?? undefined,
       },
@@ -427,13 +415,14 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     await this.consultationsService.createAudit({
       consultationSessionId: session.sessionId,
-      action: 'DOCTOR_JOIN_SUCCESS',
+      action: isRejoin ? 'DOCTOR_REJOIN' : 'DOCTOR_JOIN_SUCCESS',
       actorUserId: doctorId,
       actorRole: UserRole.DOCTOR,
       previousStatus: session.sessionStatus,
       newStatus: SessionStatus.IN_CALL,
       metadata: {
         consultationMode: session.consultationMode,
+        rejoin: isRejoin,
       },
     });
 
@@ -470,10 +459,6 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     this.assertJoinWindow(session);
 
-    if (session.patientJoinedAt) {
-      throw new ForbiddenException('Patient sudah join pada session ini');
-    }
-
     await this.ensureRoom(session);
 
     const identity = `patient_${session.sessionId}_${patientId.slice(0, 8)}`.slice(0, 128);
@@ -483,6 +468,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       'Patient';
 
     const now = new Date();
+    const isRejoin = !!session.patientJoinedAt;
     const startedAt = !session.startedAt && session.doctorJoinedAt ? now : session.startedAt;
 
     await this.prisma.consultationSession.update({
@@ -490,7 +476,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       data: {
         patientIdentity: identity,
         patientName,
-        patientJoinedAt: now,
+        patientJoinedAt: session.patientJoinedAt ?? now,
         sessionStatus: 'IN_CALL',
         startedAt: startedAt ?? undefined,
       },
@@ -498,13 +484,14 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     await this.consultationsService.createAudit({
       consultationSessionId: session.sessionId,
-      action: 'PATIENT_JOIN_SUCCESS',
+      action: isRejoin ? 'PATIENT_REJOIN' : 'PATIENT_JOIN_SUCCESS',
       actorUserId: patientId,
       actorRole: UserRole.PATIENT,
       previousStatus: session.sessionStatus,
       newStatus: SessionStatus.IN_CALL,
       metadata: {
         consultationMode: session.consultationMode,
+        rejoin: isRejoin,
       },
     });
 
@@ -518,6 +505,67 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       sessionId: session.sessionId,
       doctorName: session.doctor.name ?? 'Doctor',
       patientName,
+      consultationMode: session.consultationMode,
+      sessionType: session.sessionType,
+    };
+  }
+
+  async nurseToken(nurseId: string, sessionId: string) {
+    const session = await this.prisma.consultationSession.findUnique({
+      where: { sessionId },
+      include: {
+        nurse: {
+          include: {
+            nurseProfile: {
+              select: { nurseId: true },
+            },
+          },
+        },
+      },
+    });
+
+    if (!session) throw new NotFoundException('Session tidak ditemukan');
+    if (session.nurseId !== nurseId) {
+      throw new ForbiddenException('Bukan session nurse ini');
+    }
+
+    this.assertJoinWindow(session);
+
+    await this.ensureRoom(session);
+
+    const identity = `nurse_${session.sessionId}_${nurseId.slice(0, 8)}`.slice(0, 128);
+    const now = new Date();
+    const isRejoin = !!session.nurseJoinedAt;
+
+    await this.prisma.consultationSession.update({
+      where: { sessionId: session.sessionId },
+      data: {
+        nurseIdentity: identity,
+        nurseJoinedAt: session.nurseJoinedAt ?? now,
+      },
+    });
+
+    await this.consultationsService.createAudit({
+      consultationSessionId: session.sessionId,
+      action: isRejoin ? 'NURSE_REJOIN' : 'NURSE_JOIN_SUCCESS',
+      actorUserId: nurseId,
+      actorRole: UserRole.NURSE,
+      previousStatus: session.sessionStatus,
+      newStatus: session.sessionStatus,
+      metadata: {
+        consultationMode: session.consultationMode,
+        rejoin: isRejoin,
+      },
+    });
+
+    const provider = this.getProvider(session.consultationMode);
+    const token = provider.generateToken(identity, session.roomName);
+
+    return {
+      token,
+      roomName: session.roomName,
+      identity,
+      sessionId: session.sessionId,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
     };
@@ -591,6 +639,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       where: { consultationSessionId: sessionId },
       update: {
         doctorId,
+        nurseId: session.nurseId ?? null,
         transcriptRaw: nextTranscript,
         transcribedAt: new Date(),
         ...(nextStatus ? { aiStatus: nextStatus, aiError: null } : {}),
@@ -599,6 +648,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
         consultationSessionId: sessionId,
         doctorId,
         patientId: session.patientId,
+        nurseId: session.nurseId ?? null,
         transcriptRaw: nextTranscript,
         transcribedAt: new Date(),
         aiStatus: nextStatus ?? 'TRANSCRIBING',

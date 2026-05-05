@@ -42,6 +42,13 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       });
       if (!profile) throw new UnauthorizedException("Invalid token");
       email = profile.email;
+    } else if (user.role === UserRole.NURSE) {
+      const profile = await this.prisma.nurseProfile.findUnique({
+        where: { userId: user.id },
+        select: { email: true },
+      });
+      if (!profile) throw new UnauthorizedException("Invalid token");
+      email = profile.email;
     } else {
       const profile = await this.prisma.patientProfile.findUnique({
         where: { userId: user.id },

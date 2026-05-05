@@ -8,7 +8,7 @@ import { PrismaService } from "prisma/prisma.service";
 import { JwtService } from "@nestjs/jwt";
 import crypto from "crypto";
 import { AuthAction, OAuthProvider, UserRole } from "@prisma/client";
-import type { DoctorProfile, PatientProfile, AdminProfile, User } from "@prisma/client";
+import type { DoctorProfile, PatientProfile, AdminProfile, NurseProfile, User } from "@prisma/client";
 import type { JwtPayload } from "./types/jwt-payload";
 import type { StringValue } from "ms";
 import bcrypt from "bcryptjs";
@@ -91,7 +91,8 @@ function ensureMinimumAge(bornDate: Date, minYears: number) {
 type ProfileWithUser =
   | (DoctorProfile & { user: User })
   | (AdminProfile & { user: User })
-  | (PatientProfile & { user: User });
+  | (PatientProfile & { user: User })
+  | (NurseProfile & { user: User });
 
 @Injectable()
 export class AuthService {
@@ -140,6 +141,7 @@ export class AuthService {
     if (value === "DOCTOR") return UserRole.DOCTOR;
     if (value === "ADMIN") return UserRole.ADMIN;
     if (value === "PATIENT") return UserRole.PATIENT;
+    if (value === "NURSE") return UserRole.NURSE;
     throw new BadRequestException("Role tidak valid");
   }
 
@@ -151,7 +153,7 @@ export class AuthService {
   }
 
   private async findProfileByIdentifier(lookup: { email?: string; phone?: string }) {
-    const [doctor, admin, patient] = await this.prisma.$transaction([
+    const [doctor, admin, patient, nurse] = await this.prisma.$transaction([
       this.prisma.doctorProfile.findFirst({
         where: lookup,
         include: { user: true },
@@ -164,9 +166,13 @@ export class AuthService {
         where: lookup,
         include: { user: true },
       }),
+      this.prisma.nurseProfile.findFirst({
+        where: lookup,
+        include: { user: true },
+      }),
     ]);
 
-    const matches = [doctor, admin, patient].filter(Boolean) as ProfileWithUser[];
+    const matches = [doctor, admin, patient, nurse].filter(Boolean) as ProfileWithUser[];
     if (matches.length === 0) return null;
     if (matches.length > 1) {
       throw new BadRequestException("Data email/telepon duplikat di profile");
@@ -181,6 +187,9 @@ export class AuthService {
     if (role === UserRole.ADMIN) {
       return this.prisma.adminProfile.findUnique({ where: { userId } });
     }
+    if (role === UserRole.NURSE) {
+      return this.prisma.nurseProfile.findUnique({ where: { userId } });
+    }
     return this.prisma.patientProfile.findUnique({ where: { userId } });
   }
 
@@ -189,7 +198,7 @@ export class AuthService {
     phone: string,
     options?: { excludePendingId?: string },
   ) {
-    const [doctor, admin, patient] = await this.prisma.$transaction([
+    const [doctor, admin, patient, nurse] = await this.prisma.$transaction([
       this.prisma.doctorProfile.findFirst({
         where: { OR: [{ email }, { phone }] },
         select: { id: true },
@@ -202,9 +211,13 @@ export class AuthService {
         where: { OR: [{ email }, { phone }] },
         select: { id: true },
       }),
+      this.prisma.nurseProfile.findFirst({
+        where: { OR: [{ email }, { phone }] },
+        select: { id: true },
+      }),
     ]);
 
-    if (doctor || admin || patient) {
+    if (doctor || admin || patient || nurse) {
       throw new BadRequestException("Email atau nomor telepon sudah terdaftar");
     }
 
@@ -273,6 +286,32 @@ export class AuthService {
       select: { id: true },
     });
     if (pending) throw new BadRequestException("Admin ID sedang digunakan");
+  }
+
+  private async ensureNurseIdValid(nurseId: string, options?: { excludePendingId?: string }) {
+    const exists = await this.prisma.nurseIdWhitelist.findUnique({
+      where: { nurseId },
+      select: { id: true },
+    });
+    if (!exists) throw new BadRequestException("Nurse ID tidak terdaftar");
+
+    const used = await this.prisma.nurseProfile.findUnique({
+      where: { nurseId },
+      select: { id: true },
+    });
+    if (used) throw new BadRequestException("Nurse ID sudah digunakan");
+
+    const pending = await this.prisma.pendingRegistration.findFirst({
+      where: {
+        nurseId,
+        expiresAt: { gt: new Date() },
+        ...(options?.excludePendingId
+          ? { id: { not: options.excludePendingId } }
+          : {}),
+      },
+      select: { id: true },
+    });
+    if (pending) throw new BadRequestException("Nurse ID sedang digunakan");
   }
 
   private async purgeExpiredPendingRegistrations() {
@@ -485,6 +524,7 @@ export class AuthService {
     confirmPassword: string;
     license?: string;
     adminId?: string;
+    nurseId?: string;
     bornDate?: string;
   }) {
     const role = input.role;
@@ -535,6 +575,15 @@ export class AuthService {
       });
     }
 
+    if (role === UserRole.NURSE) {
+      if (!input.nurseId?.trim()) {
+        throw new BadRequestException("Nurse ID wajib diisi");
+      }
+      await this.ensureNurseIdValid(input.nurseId.trim(), {
+        excludePendingId: existingPending?.id,
+      });
+    }
+
     if (role === UserRole.PATIENT) {
       const bornDate = parseBornDate(input.bornDate);
       if (!bornDate) throw new BadRequestException("Tanggal lahir wajib diisi");
@@ -559,6 +608,7 @@ export class AuthService {
             passwordHash,
             license: input.license?.trim() || null,
             adminId: input.adminId?.trim() || null,
+            nurseId: input.nurseId?.trim() || null,
             bornDate: parsedBornDate,
             tokenHash: codeHash,
             expiresAt,
@@ -574,6 +624,7 @@ export class AuthService {
             passwordHash,
             license: input.license?.trim() || null,
             adminId: input.adminId?.trim() || null,
+            nurseId: input.nurseId?.trim() || null,
             bornDate: parsedBornDate,
             tokenHash: codeHash,
             expiresAt,
@@ -630,6 +681,9 @@ export class AuthService {
     if (pending.role === UserRole.ADMIN && pending.adminId) {
       await this.ensureAdminIdValid(pending.adminId, { excludePendingId: pending.id });
     }
+    if (pending.role === UserRole.NURSE && pending.nurseId) {
+      await this.ensureNurseIdValid(pending.nurseId, { excludePendingId: pending.id });
+    }
 
     if (pending.role === UserRole.PATIENT && pending.bornDate) {
       ensureMinimumAge(pending.bornDate, 17);
@@ -684,6 +738,19 @@ export class AuthService {
             phone: pending.phone,
             passwordHash: pending.passwordHash,
             bornDate: pending.bornDate!,
+          },
+        });
+      }
+
+      if (pending.role === UserRole.NURSE) {
+        await tx.nurseProfile.create({
+          data: {
+            userId: newUser.id,
+            fullName: pending.name,
+            email: pending.email,
+            phone: pending.phone,
+            passwordHash: pending.passwordHash,
+            nurseId: pending.nurseId!,
           },
         });
       }
@@ -985,6 +1052,7 @@ export class AuthService {
     name?: string;
     license?: string;
     adminId?: string;
+    nurseId?: string;
     bornDate?: string;
     ip?: string;
     userAgent?: string;
@@ -1018,6 +1086,12 @@ export class AuthService {
       const adminId = (input.adminId || "").trim();
       if (!adminId) throw new BadRequestException("Admin ID wajib diisi");
       await this.ensureAdminIdValid(adminId);
+    }
+
+    if (pending.role === UserRole.NURSE) {
+      const nurseId = (input.nurseId || "").trim();
+      if (!nurseId) throw new BadRequestException("Nurse ID wajib diisi");
+      await this.ensureNurseIdValid(nurseId);
     }
 
     if (pending.role === UserRole.PATIENT) {
@@ -1062,6 +1136,19 @@ export class AuthService {
             phone,
             passwordHash: null,
             adminId: input.adminId!.trim(),
+          },
+        });
+      }
+
+      if (pending.role === UserRole.NURSE) {
+        await tx.nurseProfile.create({
+          data: {
+            userId: newUser.id,
+            fullName: name,
+            email,
+            phone,
+            passwordHash: null,
+            nurseId: input.nurseId!.trim(),
           },
         });
       }
@@ -1145,29 +1232,42 @@ export class AuthService {
     const profile = await this.getProfileByUserId(existing.user.id, existing.user.role);
     if (!profile) throw new UnauthorizedException("Profil user tidak ditemukan");
 
-    // ROTATE refresh token
+    // ROTATE refresh token — atomically revoke old and create new inside a single
+    // transaction so two concurrent requests with the same token cannot both succeed.
+    // The updateMany WHERE revokedAt IS NULL acts as an optimistic lock: the second
+    // concurrent request will see count=0 and the transaction rolls back.
     const newRefreshRaw = randomToken();
     const newRefreshHash = sha256(newRefreshRaw);
     const newExpiresAt = new Date(Date.now() + parseTtlToMs(this.refreshTtl));
 
-    const created = await this.prisma.refreshToken.create({
-      data: {
-        userId: existing.userId,
-        tokenHash: newRefreshHash,
-        userAgent: input.userAgent,
-        ip: input.ip,
-        expiresAt: newExpiresAt,
-        replacesToken: { connect: { id: existing.id } },
-      },
-      select: { id: true },
-    });
+    const created = await this.prisma.$transaction(async (tx) => {
+      const revokeResult = await tx.refreshToken.updateMany({
+        where: { id: existing.id, revokedAt: null },
+        data: { revokedAt: new Date() },
+      });
 
-    await this.prisma.refreshToken.update({
-      where: { id: existing.id },
-      data: {
-        revokedAt: new Date(),
-        replacedByTokenId: created.id,
-      },
+      if (revokeResult.count === 0) {
+        throw new UnauthorizedException("Refresh token sudah dipakai");
+      }
+
+      const newToken = await tx.refreshToken.create({
+        data: {
+          userId: existing.userId,
+          tokenHash: newRefreshHash,
+          userAgent: input.userAgent,
+          ip: input.ip,
+          expiresAt: newExpiresAt,
+          replacesToken: { connect: { id: existing.id } },
+        },
+        select: { id: true },
+      });
+
+      await tx.refreshToken.update({
+        where: { id: existing.id },
+        data: { replacedByTokenId: newToken.id },
+      });
+
+      return newToken;
     });
 
     const payload = await this.buildAccessTokenPayload({
@@ -1369,6 +1469,23 @@ export class AuthService {
     return profile;
   }
 
+  async getNurseProfile(userId: string) {
+    const profile = await this.prisma.nurseProfile.findUnique({
+      where: { userId },
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        nurseId: true,
+        profilePicture: true,
+      },
+    });
+
+    if (!profile) throw new BadRequestException("Profil nurse tidak ditemukan");
+    return profile;
+  }
+
   async updateDoctorProfile(
     userId: string,
     input: {
@@ -1565,6 +1682,69 @@ export class AuthService {
     return updated;
   }
 
+  async updateNurseProfile(
+    userId: string,
+    input: {
+      fullName?: string;
+      phone?: string;
+      password?: string;
+    },
+  ) {
+    const profile = await this.prisma.nurseProfile.findUnique({
+      where: { userId },
+    });
+
+    if (!profile) throw new BadRequestException("Profil nurse tidak ditemukan");
+
+    const data: Record<string, any> = {};
+
+    if (input.fullName?.trim()) {
+      data.fullName = input.fullName.trim();
+    }
+
+    if (input.phone?.trim()) {
+      const phone = normalizePhone(input.phone);
+      ensurePhoneDigits(input.phone, phone);
+
+      const existing = await this.prisma.nurseProfile.findFirst({
+        where: {
+          phone,
+          id: { not: profile.id },
+        },
+        select: { id: true },
+      });
+
+      if (existing) throw new BadRequestException("Nomor telepon sudah digunakan");
+      data.phone = phone;
+    }
+
+    if (input.password?.trim()) {
+      ensurePasswordPolicy(input.password);
+      data.passwordHash = await this.hashPassword(input.password);
+    }
+
+    const updated = await this.prisma.nurseProfile.update({
+      where: { userId },
+      data,
+      select: {
+        id: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        nurseId: true,
+      },
+    });
+
+    if (data.fullName) {
+      await this.prisma.user.update({
+        where: { id: userId },
+        data: { name: data.fullName },
+      });
+    }
+
+    return updated;
+  }
+
   // Email Change Flow
   async requestEmailChange(userId: string, input: { newEmail: string; password: string }) {
     const newEmail = normalizeEmail(input.newEmail);
@@ -1592,6 +1772,10 @@ export class AuthService {
         select: { id: true },
       }),
       this.prisma.patientProfile.findFirst({
+        where: { email: newEmail, userId: { not: userId } },
+        select: { id: true },
+      }),
+      this.prisma.nurseProfile.findFirst({
         where: { email: newEmail, userId: { not: userId } },
         select: { id: true },
       }),
@@ -1661,6 +1845,11 @@ export class AuthService {
         });
       } else if (profile.user.role === UserRole.ADMIN) {
         await tx.adminProfile.update({
+          where: { userId },
+          data: { email: newEmail },
+        });
+      } else if (profile.user.role === UserRole.NURSE) {
+        await tx.nurseProfile.update({
           where: { userId },
           data: { email: newEmail },
         });
@@ -1769,6 +1958,11 @@ export class AuthService {
           where: { userId },
           data: { passwordHash },
         });
+      } else if (profile.user.role === UserRole.NURSE) {
+        await tx.nurseProfile.update({
+          where: { userId },
+          data: { passwordHash },
+        });
       } else {
         await tx.patientProfile.update({
           where: { userId },
@@ -1805,6 +1999,11 @@ export class AuthService {
           where: { userId },
           data: { profilePicture: filePath },
         });
+      } else if (profile.user.role === UserRole.NURSE) {
+        await tx.nurseProfile.update({
+          where: { userId },
+          data: { profilePicture: filePath },
+        });
       } else {
         await tx.patientProfile.update({
           where: { userId },
@@ -1817,7 +2016,7 @@ export class AuthService {
   }
 
   private async findProfileByUserId(userId: string) {
-    const [doctor, admin, patient] = await this.prisma.$transaction([
+    const [doctor, admin, patient, nurse] = await this.prisma.$transaction([
       this.prisma.doctorProfile.findFirst({
         where: { userId },
         include: { user: true },
@@ -1830,9 +2029,13 @@ export class AuthService {
         where: { userId },
         include: { user: true },
       }),
+      this.prisma.nurseProfile.findFirst({
+        where: { userId },
+        include: { user: true },
+      }),
     ]);
 
-    const profiles = [doctor, admin, patient].filter(Boolean) as ProfileWithUser[];
+    const profiles = [doctor, admin, patient, nurse].filter(Boolean) as ProfileWithUser[];
     if (profiles.length === 0) return null;
     return profiles[0];
   }

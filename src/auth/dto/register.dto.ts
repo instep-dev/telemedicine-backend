@@ -32,5 +32,9 @@ export class RegisterDto {
 
   @IsOptional()
   @IsString()
+  nurseId?: string;
+
+  @IsOptional()
+  @IsString()
   bornDate?: string; // YYYY-MM-DD
 }

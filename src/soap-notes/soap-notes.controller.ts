@@ -76,9 +76,11 @@ export class SoapNotesController {
 
     return this.sseSubject.pipe(
       filter((event) => event.sessionId === sessionId),
-      // Patients only receive events after finalization — prevents SOAP data leak
+      // Patients and nurses only receive events after finalization — prevents SOAP data leak
       filter(
-        (event) => role === UserRole.DOCTOR || event.note.isFinalized,
+        (event) =>
+          role === UserRole.DOCTOR ||
+          ((role === UserRole.PATIENT || role === UserRole.NURSE) && event.note.isFinalized),
       ),
       map((event) => ({
         data: { type: 'NOTE_UPDATED', note: event.note },
@@ -93,8 +95,8 @@ export class SoapNotesController {
   }
 
   private requireDoctorOrPatient(role: UserRole) {
-    if (role !== UserRole.DOCTOR && role !== UserRole.PATIENT) {
-      throw new ForbiddenException('Hanya dokter atau pasien yang dapat mengakses SOAP note');
+    if (role !== UserRole.DOCTOR && role !== UserRole.PATIENT && role !== UserRole.NURSE) {
+      throw new ForbiddenException('Hanya dokter, pasien, atau nurse yang dapat mengakses SOAP note');
     }
   }
 }

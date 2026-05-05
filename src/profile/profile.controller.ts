@@ -21,6 +21,7 @@ import {
   UpdateDoctorProfileDto,
   UpdateAdminProfileDto,
   UpdatePatientProfileDto,
+  UpdateNurseProfileDto,
 } from "../auth/dto/update-profile.dto";
 import {
   ChangeEmailRequestDto,
@@ -66,6 +67,11 @@ export class ProfileController {
     return this.auth.getPatientProfile(user.sub);
   }
 
+  @Get("nurse")
+  async getNurseProfile(@CurrentUser() user: JwtPayload) {
+    return this.auth.getNurseProfile(user.sub);
+  }
+
   // ==================== UPDATE PROFILE ====================
   @Put("doctor")
   async updateDoctorProfile(
@@ -91,6 +97,14 @@ export class ProfileController {
     return this.auth.updatePatientProfile(user.sub, dto);
   }
 
+  @Put("nurse")
+  async updateNurseProfile(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateNurseProfileDto,
+  ) {
+    return this.auth.updateNurseProfile(user.sub, dto);
+  }
+
   // ==================== EMAIL CHANGE FLOW ====================
   @Post("doctor/change-email")
   async requestEmailChangeDoctor(
@@ -110,6 +124,14 @@ export class ProfileController {
 
   @Post("patient/change-email")
   async requestEmailChangePatient(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ChangeEmailRequestDto,
+  ) {
+    return this.auth.requestEmailChange(user.sub, dto);
+  }
+
+  @Post("nurse/change-email")
+  async requestEmailChangeNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangeEmailRequestDto,
   ) {
@@ -140,6 +162,14 @@ export class ProfileController {
     return this.auth.confirmEmailChange(user.sub, dto);
   }
 
+  @Post("nurse/confirm-email-change")
+  async confirmEmailChangeNurse(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: ConfirmEmailChangeDto,
+  ) {
+    return this.auth.confirmEmailChange(user.sub, dto);
+  }
+
   // ==================== PASSWORD RESET FLOW ====================
   @Post("doctor/forgot-password")
   async requestPasswordResetDoctor(@CurrentUser() user: JwtPayload) {
@@ -153,6 +183,11 @@ export class ProfileController {
 
   @Post("patient/forgot-password")
   async requestPasswordResetPatient(@CurrentUser() user: JwtPayload) {
+    return this.auth.requestPasswordReset(user.sub);
+  }
+
+  @Post("nurse/forgot-password")
+  async requestPasswordResetNurse(@CurrentUser() user: JwtPayload) {
     return this.auth.requestPasswordReset(user.sub);
   }
 
@@ -174,6 +209,14 @@ export class ProfileController {
 
   @Post("patient/verify-reset-code")
   async verifyResetCodePatient(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { code: string },
+  ) {
+    return this.auth.verifyResetCode(user.sub, dto.code);
+  }
+
+  @Post("nurse/verify-reset-code")
+  async verifyResetCodeNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: { code: string },
   ) {
@@ -204,6 +247,14 @@ export class ProfileController {
     return this.auth.setNewPassword(user.sub, dto);
   }
 
+  @Post("nurse/set-new-password")
+  async setNewPasswordNurse(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SetNewPasswordDto,
+  ) {
+    return this.auth.setNewPassword(user.sub, dto);
+  }
+
   // ==================== PROFILE PICTURE UPLOAD ====================
   @Post("doctor/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
@@ -226,6 +277,15 @@ export class ProfileController {
   @Post("patient/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
   async uploadPicturePatient(
+    @CurrentUser() user: JwtPayload,
+    @UploadedFile() file: any,
+  ) {
+    return this.uploadProfilePicture(user.sub, file);
+  }
+
+  @Post("nurse/upload-picture")
+  @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
+  async uploadPictureNurse(
     @CurrentUser() user: JwtPayload,
     @UploadedFile() file: any,
   ) {

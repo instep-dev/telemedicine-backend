@@ -15,6 +15,10 @@ export class CreateConsultationSessionDto {
   @IsUUID()
   patientId: string;
 
+  @IsOptional()
+  @IsUUID()
+  nurseId?: string;
+
   @IsEnum(SessionType)
   sessionType: SessionType;
 

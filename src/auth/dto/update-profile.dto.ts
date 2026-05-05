@@ -49,7 +49,23 @@ export class UpdatePatientProfileDto {
   password?: string;
 }
 
+export class UpdateNurseProfileDto {
+  @IsOptional()
+  @IsString()
+  fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  password?: string;
+}
+
 export type UpdateProfileDto =
   | UpdateDoctorProfileDto
   | UpdateAdminProfileDto
-  | UpdatePatientProfileDto;
+  | UpdatePatientProfileDto
+  | UpdateNurseProfileDto;

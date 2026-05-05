@@ -75,6 +75,15 @@ export class TwilioController {
   }
 
   @UseGuards(JwtGuard)
+  @Post('video/nurse-token')
+  async nurseToken(@Req() req: any, @Body() dto: DoctorVideoTokenDto) {
+    if (req.user.role !== UserRole.NURSE) {
+      throw new ForbiddenException('Hanya nurse yang boleh join sebagai nurse');
+    }
+    return this.twilio.nurseToken(req.user.id, dto.sessionId);
+  }
+
+  @UseGuards(JwtGuard)
   @Post('video/transcription')
   async saveTranscription(@Req() req: any, @Body() dto: VideoTranscriptionDto) {
     if (req.user.role !== UserRole.DOCTOR) {
