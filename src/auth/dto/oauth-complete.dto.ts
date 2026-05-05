@@ -22,4 +22,8 @@ export class OAuthCompleteDto {
   @IsOptional()
   @IsString()
   adminId?: string;
+
+  @IsOptional()
+  @IsString()
+  nurseId?: string;
 }

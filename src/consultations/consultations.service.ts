@@ -38,6 +38,16 @@ const sessionWithProfilesInclude =
         },
       },
     },
+    nurse: {
+      include: {
+        nurseProfile: {
+          select: {
+            fullName: true,
+            nurseId: true,
+          },
+        },
+      },
+    },
     createdByAdmin: {
       include: {
         adminProfile: {
@@ -239,12 +249,9 @@ export class ConsultationsService {
     if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') {
       return false;
     }
-    if (session.doctorJoinedAt) return false;
-
     if (session.sessionType === 'INSTANT') {
       return true;
     }
-
     if (!session.scheduledEndTime) return false;
     return (
       now.getTime() >= session.scheduledStartTime.getTime() &&
@@ -256,17 +263,33 @@ export class ConsultationsService {
     if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') {
       return false;
     }
-    if (session.patientJoinedAt) return false;
-
     if (session.sessionType === 'INSTANT') {
       return true;
     }
-
     if (!session.scheduledEndTime) return false;
     return (
       now.getTime() >= session.scheduledStartTime.getTime() &&
       now.getTime() < session.scheduledEndTime.getTime()
     );
+  }
+
+  private canNurseJoinNow(session: SessionWithProfiles, now = new Date()): boolean {
+    if (!session.nurseId) return false;
+    if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') {
+      return false;
+    }
+    if (session.sessionType === 'INSTANT') {
+      return true;
+    }
+    if (!session.scheduledEndTime) return false;
+    return (
+      now.getTime() >= session.scheduledStartTime.getTime() &&
+      now.getTime() < session.scheduledEndTime.getTime()
+    );
+  }
+
+  private getNurseDisplayName(session: SessionWithProfiles): string | null {
+    return session.nurse?.nurseProfile?.fullName ?? session.nurse?.name ?? null;
   }
 
   private mapSession(session: SessionWithProfiles) {
@@ -283,6 +306,8 @@ export class ConsultationsService {
       doctorName: this.getDoctorDisplayName(session),
       patientId: session.patientId,
       patientName: this.getPatientDisplayName(session),
+      nurseId: session.nurseId ?? null,
+      nurseName: this.getNurseDisplayName(session),
       createdBy: session.createdBy,
       createdByName:
         session.createdByAdmin.adminProfile?.fullName ??
@@ -290,21 +315,38 @@ export class ConsultationsService {
         null,
       doctorJoinedAt: session.doctorJoinedAt,
       patientJoinedAt: session.patientJoinedAt,
+      nurseJoinedAt: session.nurseJoinedAt,
       startedAt: session.startedAt,
       endedAt: session.endedAt,
       roomName: session.roomName,
       canDoctorJoin: this.canDoctorJoinNow(session),
       canPatientJoin: this.canPatientJoinNow(session),
-      doctorJoinState: session.doctorJoinedAt
-        ? 'JOINED'
-        : this.canDoctorJoinNow(session)
-          ? 'JOIN'
-          : 'DISABLED',
-      patientJoinState: session.patientJoinedAt
-        ? 'JOINED'
-        : this.canPatientJoinNow(session)
-          ? 'JOIN'
-          : 'DISABLED',
+      canNurseJoin: this.canNurseJoinNow(session),
+      doctorJoinState:
+        session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED'
+          ? session.doctorJoinedAt
+            ? 'JOINED'
+            : 'DISABLED'
+          : this.canDoctorJoinNow(session)
+            ? 'JOIN'
+            : 'DISABLED',
+      patientJoinState:
+        session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED'
+          ? session.patientJoinedAt
+            ? 'JOINED'
+            : 'DISABLED'
+          : this.canPatientJoinNow(session)
+            ? 'JOIN'
+            : 'DISABLED',
+      nurseJoinState: !session.nurseId
+        ? 'NONE'
+        : session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED'
+          ? session.nurseJoinedAt
+            ? 'JOINED'
+            : 'DISABLED'
+          : this.canNurseJoinNow(session)
+            ? 'JOIN'
+            : 'DISABLED',
       consultationNote: session.consultationNote
         ? {
             id: session.consultationNote.id,
@@ -425,6 +467,19 @@ export class ConsultationsService {
     }
     this.assertRole(patient.role, UserRole.PATIENT);
 
+    let nurseUserId: string | null = null;
+    if (dto.nurseId) {
+      const nurse = await this.prisma.user.findUnique({
+        where: { id: dto.nurseId },
+        select: { id: true, role: true, isActive: true },
+      });
+      if (!nurse || !nurse.isActive) {
+        throw new BadRequestException('Nurse tidak valid');
+      }
+      this.assertRole(nurse.role, UserRole.NURSE);
+      nurseUserId = nurse.id;
+    }
+
     const doctorProfile = await this.prisma.doctorProfile.findUnique({
       where: { userId: doctor.id },
       select: { license: true },
@@ -479,6 +534,7 @@ export class ConsultationsService {
         sessionId,
         doctorId: doctor.id,
         patientId: patient.id,
+        nurseId: nurseUserId,
         sessionType: dto.sessionType,
         consultationMode: dto.consultationMode,
         scheduledDate,
@@ -616,6 +672,30 @@ export class ConsultationsService {
     return rows.map((item) => this.mapSession(item));
   }
 
+  async listNurseSessions(nurseId: string, query: ListConsultationSessionsQueryDto) {
+    const nurse = await this.prisma.user.findUnique({
+      where: { id: nurseId },
+      select: { id: true, role: true },
+    });
+    if (!nurse) throw new ForbiddenException('Nurse tidak ditemukan');
+    this.assertRole(nurse.role, UserRole.NURSE);
+
+    const whereClause: any = {
+      nurseId,
+      ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
+      ...(query.status ? { sessionStatus: query.status } : {}),
+      ...this.buildSearchClause(query.search),
+    };
+
+    const rows = await this.prisma.consultationSession.findMany({
+      where: whereClause,
+      orderBy: this.normalizeSort(query.sort),
+      include: sessionWithProfilesInclude,
+    });
+
+    return rows.map((item) => this.mapSession(item));
+  }
+
   async getSessionForDoctor(doctorId: string, sessionId: string) {
     const session = await this.findSessionWithProfilesById(sessionId);
     if (!session) throw new NotFoundException('Session tidak ditemukan');
@@ -630,6 +710,15 @@ export class ConsultationsService {
     if (!session) throw new NotFoundException('Session tidak ditemukan');
     if (session.patientId !== patientId) {
       throw new ForbiddenException('Bukan session patient ini');
+    }
+    return this.mapSession(session);
+  }
+
+  async getSessionForNurse(nurseId: string, sessionId: string) {
+    const session = await this.findSessionWithProfilesById(sessionId);
+    if (!session) throw new NotFoundException('Session tidak ditemukan');
+    if (session.nurseId !== nurseId) {
+      throw new ForbiddenException('Bukan session nurse ini');
     }
     return this.mapSession(session);
   }
@@ -723,6 +812,42 @@ export class ConsultationsService {
       email: item.email,
       phone: item.phone,
       license: item.license,
+    }));
+  }
+
+  async listNurseOptions(adminId: string) {
+    const admin = await this.prisma.user.findUnique({
+      where: { id: adminId },
+      select: { id: true, role: true },
+    });
+    if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
+    this.assertRole(admin.role, UserRole.ADMIN);
+
+    const rows = await this.prisma.nurseProfile.findMany({
+      where: {
+        user: {
+          isActive: true,
+          role: UserRole.NURSE,
+        },
+      },
+      select: {
+        userId: true,
+        fullName: true,
+        email: true,
+        phone: true,
+        nurseId: true,
+      },
+      orderBy: {
+        fullName: 'asc',
+      },
+    });
+
+    return rows.map((item) => ({
+      userId: item.userId,
+      fullName: item.fullName,
+      email: item.email,
+      phone: item.phone,
+      nurseId: item.nurseId,
     }));
   }
 

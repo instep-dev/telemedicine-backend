@@ -46,6 +46,19 @@ const MRNS = [
   "55-44-33",
 ];
 
+const NURSE_IDS = [
+  "2026040101",
+  "2026040102",
+  "2026040103",
+  "2026040104",
+  "2026040105",
+  "2026040106",
+  "2026040107",
+  "2026040108",
+  "2026040109",
+  "2026040110",
+];
+
 async function main() {
   console.log("? Start seeding...");
 
@@ -63,9 +76,11 @@ async function main() {
   await prisma.user.deleteMany();
   await prisma.authAuditLog.deleteMany();
 
+  await prisma.nurseProfile.deleteMany();
   await prisma.licenseWhitelist.deleteMany();
   await prisma.adminIdWhitelist.deleteMany();
   await prisma.mrnWhitelist.deleteMany();
+  await prisma.nurseIdWhitelist.deleteMany();
 
   for (const license of LICENSES) {
     await prisma.licenseWhitelist.create({ data: { license } });
@@ -79,10 +94,15 @@ async function main() {
     await prisma.mrnWhitelist.create({ data: { mrn } });
   }
 
+  for (const nurseId of NURSE_IDS) {
+    await prisma.nurseIdWhitelist.create({ data: { nurseId } });
+  }
+
   console.log("? Seed selesai");
   console.log("? License whitelist: 10 item");
   console.log("? Admin ID whitelist: 10 item");
   console.log("? MRN whitelist: 10 item");
+  console.log("? Nurse ID whitelist: 10 item");
 }
 
 main()

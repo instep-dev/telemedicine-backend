@@ -20,6 +20,7 @@ const NOTE_INCLUDE = {
       scheduledStartTime: true,
       scheduledEndTime: true,
       durationMinutes: true,
+      nurseId: true,
       doctor: {
         select: {
           id: true,
@@ -30,6 +31,12 @@ const NOTE_INCLUDE = {
         select: {
           id: true,
           patientProfile: { select: { fullName: true } },
+        },
+      },
+      nurse: {
+        select: {
+          id: true,
+          nurseProfile: { select: { fullName: true } },
         },
       },
     },
@@ -54,6 +61,12 @@ export class SoapNotesService {
     this.assertAccess(note, userId, role);
 
     if (role === UserRole.PATIENT && !note.isFinalized) {
+      throw new ForbiddenException(
+        'Dokter belum memfinalisasi hasil konsultasi ini',
+      );
+    }
+
+    if (role === UserRole.NURSE && !note.isFinalized) {
       throw new ForbiddenException(
         'Dokter belum memfinalisasi hasil konsultasi ini',
       );
@@ -122,11 +135,15 @@ export class SoapNotesService {
   async verifyStreamAccess(sessionId: string, userId: string, role: UserRole) {
     const note = await this.prisma.consultationNote.findUnique({
       where: { consultationSessionId: sessionId },
-      select: { doctorId: true, patientId: true },
+      select: {
+        doctorId: true,
+        patientId: true,
+        consultationSession: { select: { nurseId: true } },
+      },
     });
 
     if (!note) throw new NotFoundException('SOAP note tidak ditemukan');
-    this.assertAccess(note, userId, role);
+    this.assertAccess(note as any, userId, role);
   }
 
   // ── private helpers ────────────────────────────────────────────────────────
@@ -145,7 +162,7 @@ export class SoapNotesService {
   }
 
   private assertAccess(
-    note: { doctorId: string; patientId: string },
+    note: { doctorId: string; patientId: string; consultationSession?: { nurseId?: string | null } | null },
     userId: string,
     role: UserRole,
   ) {
@@ -154,6 +171,11 @@ export class SoapNotesService {
     }
     if (role === UserRole.PATIENT && note.patientId !== userId) {
       throw new ForbiddenException('Bukan SOAP note pasien ini');
+    }
+    if (role === UserRole.NURSE) {
+      if (!note.consultationSession?.nurseId || note.consultationSession.nurseId !== userId) {
+        throw new ForbiddenException('Bukan SOAP note nurse ini');
+      }
     }
     if (role === UserRole.ADMIN) {
       throw new ForbiddenException('Admin tidak dapat mengakses SOAP note');
@@ -167,8 +189,10 @@ export class SoapNotesService {
       consultationSessionId: note.consultationSessionId,
       doctorId: note.doctorId,
       patientId: note.patientId,
+      nurseId: note.nurseId ?? null,
       doctorName: session?.doctor?.doctorProfile?.fullName ?? null,
       patientName: session?.patient?.patientProfile?.fullName ?? null,
+      nurseName: session?.nurse?.nurseProfile?.fullName ?? null,
       scheduledStartTime: session?.scheduledStartTime ?? null,
       scheduledEndTime: session?.scheduledEndTime ?? null,
       durationMinutes: session?.durationMinutes ?? null,

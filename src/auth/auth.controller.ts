@@ -28,11 +28,12 @@ export class AuthController {
       rememberMe: dto.rememberMe,
     });
 
-    // Refresh token via HttpOnly Cookie (recommended)
+    // Clear any stale duplicate refresh_token cookies before setting the new one
+    res.clearCookie("refresh_token", { path: "/" });
     res.cookie("refresh_token", result.refreshToken, {
       httpOnly: true,
       sameSite: "lax",
-      secure: false, // true kalau https
+      secure: false,
       path: "/",
       maxAge: 1000 * 60 * 60 * 24 * (dto.rememberMe ? 10 : 30),
     });
@@ -49,8 +50,24 @@ export class AuthController {
   }
 
   @Post("registration/verify-email")
-  async verifyEmail(@Body() dto: VerifyEmailDto) {
-    return this.auth.verifyEmail(dto);
+  async verifyEmail(
+    @Body() dto: VerifyEmailDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const result = await this.auth.verifyEmail(dto);
+
+    if (result.refreshToken) {
+      res.clearCookie("refresh_token", { path: "/" });
+      res.cookie("refresh_token", result.refreshToken, {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: false,
+        path: "/",
+        maxAge: 1000 * 60 * 60 * 24 * 30,
+      });
+    }
+
+    return { accessToken: result.accessToken, user: result.user };
   }
 
   @Get("oauth/:provider/start")
@@ -82,6 +99,7 @@ export class AuthController {
     });
 
     if (result.refreshToken) {
+      res.clearCookie("refresh_token", { path: "/" });
       res.cookie("refresh_token", result.refreshToken, {
         httpOnly: true,
         sameSite: "lax",
@@ -109,6 +127,7 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
+    res.clearCookie("refresh_token", { path: "/" });
     res.cookie("refresh_token", result.refreshToken, {
       httpOnly: true,
       sameSite: "lax",
@@ -124,7 +143,16 @@ export class AuthController {
   async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const ip = req.ip;
     const userAgent = req.headers["user-agent"];
-    const rt = (req.cookies?.["refresh_token"] as string | undefined) || "";
+
+    // When multiple refresh_token cookies exist (e.g. leftover from a previous
+    // session on the same localhost), cookie-parser returns the first (oldest).
+    // We always want the LAST one in the raw header because browsers append new
+    // cookies after existing ones, so the last entry is always the newest.
+    const rawCookie = (req.headers.cookie as string) ?? "";
+    const matches = [...rawCookie.matchAll(/(?:^|;\s*)refresh_token=([^;]+)/g)];
+    const rt = matches.length > 0
+      ? decodeURIComponent(matches[matches.length - 1][1].trim())
+      : ((req.cookies?.["refresh_token"] as string | undefined) ?? "");
 
     const result = await this.auth.refresh({
       refreshToken: rt,
@@ -132,6 +160,8 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
+    // Clear duplicates then set the single rotated cookie
+    res.clearCookie("refresh_token", { path: "/" });
     res.cookie("refresh_token", result.refreshToken, {
       httpOnly: true,
       sameSite: "lax",
@@ -172,7 +202,11 @@ export class AuthController {
   async logout(@Req() req: any, @Res({ passthrough: true }) res: Response) {
     const ip = req.ip;
     const userAgent = req.headers["user-agent"];
-    const rt = (req.cookies?.["refresh_token"] as string | undefined) || undefined;
+    const rawCookie2 = (req.headers.cookie as string) ?? "";
+    const logoutMatches = [...rawCookie2.matchAll(/(?:^|;\s*)refresh_token=([^;]+)/g)];
+    const rt = logoutMatches.length > 0
+      ? decodeURIComponent(logoutMatches[logoutMatches.length - 1][1].trim())
+      : ((req.cookies?.["refresh_token"] as string | undefined) ?? undefined);
 
     await this.auth.logout({
       refreshToken: rt,

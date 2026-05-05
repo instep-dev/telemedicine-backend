@@ -48,7 +48,7 @@ export class VideoCallService {
       room = await this.client.video.v1.rooms.create({
         uniqueName: roomName,
         type: 'group',
-        maxParticipants: 2,
+        maxParticipants: 3,
         statusCallback: statusCallbackUrl,
         statusCallbackMethod: 'POST',
         recordParticipantsOnConnect: true,

@@ -1,6 +1,25 @@
 import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'prisma/prisma.service';
 import { SummaryService } from './summary.service';
+
+export const AI_STATUS_UPDATED_EVENT = 'ai.status.updated';
+
+export interface AiStatusUpdatedPayload {
+  noteId: string;
+  sessionId: string;
+  doctorId: string | null;
+  nurseId: string | null;
+  aiStatus: string;
+  aiError: string | null;
+  summary?: string | null;
+  subjective?: string | null;
+  objective?: string | null;
+  assessment?: string | null;
+  plan?: string | null;
+  summarizedAt?: string | null;
+  transcribedAt?: string | null;
+}
 
 @Injectable()
 export class AiService {
@@ -9,6 +28,7 @@ export class AiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly summaryService: SummaryService,
+    private readonly events: EventEmitter2,
   ) {}
 
   async processConsultationFromTranscript(
@@ -44,11 +64,26 @@ export class AiService {
       consultationSession.consultationNote?.transcriptRaw ?? '',
     ).trim();
 
+    const nurseId = (consultationSession as any).nurseId ?? null;
+
+    const emitEvent = (note: { id: string }, aiStatus: string, extra: Partial<AiStatusUpdatedPayload> = {}) => {
+      const payload: AiStatusUpdatedPayload = {
+        noteId: note.id,
+        sessionId,
+        doctorId: consultationSession.doctorId,
+        nurseId,
+        aiStatus,
+        aiError: null,
+        ...extra,
+      };
+      this.events.emit(AI_STATUS_UPDATED_EVENT, payload);
+    };
+
     const upsertStatus = async (
       aiStatus: string,
       extra: Record<string, any> = {},
     ) => {
-      await this.prisma.consultationNote.upsert({
+      const result = await this.prisma.consultationNote.upsert({
         where: { consultationSessionId: sessionId },
         update: {
           doctorId: consultationSession.doctorId,
@@ -65,10 +100,12 @@ export class AiService {
           ...extra,
         },
       });
+      emitEvent(result, aiStatus, extra);
+      return result;
     };
 
     if (!transcriptRaw) {
-      await this.prisma.consultationNote.upsert({
+      const result = await this.prisma.consultationNote.upsert({
         where: { consultationSessionId: sessionId },
         update: {
           doctorId: consultationSession.doctorId,
@@ -83,9 +120,12 @@ export class AiService {
           aiError: 'Transcript kosong. Tidak ada percakapan yang terdeteksi.',
         },
       });
-      this.logger.warn(
-        `Transcript empty for sessionId=${sessionId}`,
-      );
+
+      emitEvent(result, 'FAILED', {
+        aiError: 'Transcript kosong. Tidak ada percakapan yang terdeteksi.',
+      });
+
+      this.logger.warn(`Transcript empty for sessionId=${sessionId}`);
       return;
     }
 
@@ -98,7 +138,11 @@ export class AiService {
 
       const summary = await this.summaryService.createMedicalSummary(transcriptRaw);
 
-      await this.prisma.consultationNote.upsert({
+      const summarizedAt = new Date();
+      const transcribedAt =
+        consultationSession.consultationNote?.transcribedAt ?? new Date();
+
+      const result = await this.prisma.consultationNote.upsert({
         where: { consultationSessionId: sessionId },
         update: {
           doctorId: consultationSession.doctorId,
@@ -110,9 +154,8 @@ export class AiService {
           plan: summary.plan,
           aiStatus: 'SUCCESS',
           aiError: null,
-          summarizedAt: new Date(),
-          transcribedAt:
-            consultationSession.consultationNote?.transcribedAt ?? new Date(),
+          summarizedAt,
+          transcribedAt,
         },
         create: {
           consultationSessionId: sessionId,
@@ -126,21 +169,30 @@ export class AiService {
           plan: summary.plan,
           aiStatus: 'SUCCESS',
           aiError: null,
-          summarizedAt: new Date(),
-          transcribedAt:
-            consultationSession.consultationNote?.transcribedAt ?? new Date(),
+          summarizedAt,
+          transcribedAt,
         },
       });
 
-      this.logger.log(
-        `AI summary completed for sessionId=${sessionId}`,
-      );
+      emitEvent(result, 'SUCCESS', {
+        summary: summary.summary,
+        subjective: summary.subjective,
+        objective: summary.objective,
+        assessment: summary.assessment,
+        plan: summary.plan,
+        summarizedAt: summarizedAt.toISOString(),
+        transcribedAt: transcribedAt instanceof Date
+          ? transcribedAt.toISOString()
+          : transcribedAt,
+      });
+
+      this.logger.log(`AI summary completed for sessionId=${sessionId}`);
     } catch (error: any) {
       this.logger.error(
         `AI summary failed sessionId=${sessionId} message=${error?.message || error}`,
       );
 
-      await this.prisma.consultationNote.upsert({
+      const result = await this.prisma.consultationNote.upsert({
         where: { consultationSessionId: sessionId },
         update: {
           doctorId: consultationSession.doctorId,
@@ -154,6 +206,10 @@ export class AiService {
           aiStatus: 'FAILED',
           aiError: error?.message || String(error),
         },
+      });
+
+      emitEvent(result, 'FAILED', {
+        aiError: error?.message || String(error),
       });
 
       throw error;
