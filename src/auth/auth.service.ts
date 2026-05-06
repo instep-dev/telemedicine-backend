@@ -372,8 +372,7 @@ export class AuthService {
     const refreshRaw = randomToken();
     const refreshHash = sha256(refreshRaw);
     
-    // If rememberMe is true, set expiration to 10 days, otherwise use default
-    const refreshTtl = params.rememberMe ? "10d" : this.refreshTtl;
+    const refreshTtl = params.rememberMe ? "30d" : "1d";
     const refreshExpiresAt = new Date(Date.now() + parseTtlToMs(refreshTtl));
 
     const refreshRow = await this.prisma.refreshToken.create({

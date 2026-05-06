@@ -35,7 +35,7 @@ export class AuthController {
       sameSite: "lax",
       secure: false,
       path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * (dto.rememberMe ? 10 : 30),
+      maxAge: 1000 * 60 * 60 * 24 * (dto.rememberMe ? 30 : 1),
     });
 
     return {
