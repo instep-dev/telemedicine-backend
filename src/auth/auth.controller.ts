@@ -4,12 +4,32 @@ import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
 import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { OAuthCompleteDto } from "./dto/oauth-complete.dto";
-import type { Request, Response } from "express";
+import type { Request, Response, CookieOptions } from "express";
 import { JwtGuard } from "./guards/jwt.guard";
 
 @Controller("auth")
 export class AuthController {
   constructor(private auth: AuthService) {}
+
+  private refreshCookieOptions(maxAgeDays: number): CookieOptions {
+    const isProd = process.env.NODE_ENV === "production";
+    return {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: isProd,
+      path: "/",
+      ...(isProd && process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
+      maxAge: 1000 * 60 * 60 * 24 * maxAgeDays,
+    };
+  }
+
+  private clearRefreshCookieOptions(): CookieOptions {
+    const isProd = process.env.NODE_ENV === "production";
+    return {
+      path: "/",
+      ...(isProd && process.env.COOKIE_DOMAIN ? { domain: process.env.COOKIE_DOMAIN } : {}),
+    };
+  }
 
   @Post("login")
   async login(
@@ -28,15 +48,8 @@ export class AuthController {
       rememberMe: dto.rememberMe,
     });
 
-    // Clear any stale duplicate refresh_token cookies before setting the new one
-    res.clearCookie("refresh_token", { path: "/" });
-    res.cookie("refresh_token", result.refreshToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * (dto.rememberMe ? 30 : 1),
-    });
+    res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
+    res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(dto.rememberMe ? 30 : 1));
 
     return {
       accessToken: result.accessToken,
@@ -57,14 +70,8 @@ export class AuthController {
     const result = await this.auth.verifyEmail(dto);
 
     if (result.refreshToken) {
-      res.clearCookie("refresh_token", { path: "/" });
-      res.cookie("refresh_token", result.refreshToken, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: false,
-        path: "/",
-        maxAge: 1000 * 60 * 60 * 24 * 30,
-      });
+      res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
+      res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
     }
 
     return { accessToken: result.accessToken, user: result.user };
@@ -99,14 +106,8 @@ export class AuthController {
     });
 
     if (result.refreshToken) {
-      res.clearCookie("refresh_token", { path: "/" });
-      res.cookie("refresh_token", result.refreshToken, {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: false,
-        path: "/",
-        maxAge: 1000 * 60 * 60 * 24 * 30,
-      });
+      res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
+      res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
     }
 
     return res.redirect(result.redirectUrl);
@@ -127,14 +128,8 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
-    res.clearCookie("refresh_token", { path: "/" });
-    res.cookie("refresh_token", result.refreshToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 30,
-    });
+    res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
+    res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
 
     return { accessToken: result.accessToken, user: result.user };
   }
@@ -160,15 +155,8 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
-    // Clear duplicates then set the single rotated cookie
-    res.clearCookie("refresh_token", { path: "/" });
-    res.cookie("refresh_token", result.refreshToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 30,
-    });
+    res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
+    res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
 
     return { accessToken: result.accessToken, user: result.user };
   }
@@ -186,13 +174,7 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
-    res.cookie("refresh_token", result.refreshToken, {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: false,
-      path: "/",
-      maxAge: 1000 * 60 * 60 * 24 * 30,
-    });
+    res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
 
     return { accessToken: result.accessToken, user: result.user };
   }
@@ -215,7 +197,7 @@ export class AuthController {
       userAgent: typeof userAgent === "string" ? userAgent : undefined,
     });
 
-    res.clearCookie("refresh_token", { path: "/" });
+    res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     return { ok: true };
   }
 
