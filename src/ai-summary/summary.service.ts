@@ -41,7 +41,7 @@ export class SummaryService {
     const prompt = this.buildPrompt(cleanTranscript);
 
     try {
-      const response = await this.ai.models.generateContent({
+      const response = await this.withRetry(() => this.ai.models.generateContent({
         model: this.model,
         contents: prompt,
         config: {
@@ -79,7 +79,7 @@ export class SummaryService {
             required: ['summary', 'subjective', 'objective', 'assessment', 'plan'],
           },
         },
-      });
+      }));
 
       const rawText = String(response.text || '').trim();
 
@@ -120,6 +120,24 @@ export class SummaryService {
         `Gemini summary generation failed: ${error?.message || String(error)}`,
       );
     }
+  }
+
+  private async withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+    let lastError: any;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (error: any) {
+        const status = error?.status ?? error?.response?.status;
+        const isRetryable = status === 503 || status === 429;
+        if (!isRetryable || attempt === maxAttempts) throw error;
+        const delayMs = 2000 * attempt;
+        this.logger.warn(`Gemini ${status} attempt ${attempt}/${maxAttempts}, retrying in ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+        lastError = error;
+      }
+    }
+    throw lastError;
   }
 
   private buildPrompt(transcript: string): string {
