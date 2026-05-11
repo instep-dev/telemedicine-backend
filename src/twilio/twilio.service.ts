@@ -343,6 +343,14 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
             },
           },
         },
+        patient: {
+          include: {
+            patientProfile: {
+              select: { fullName: true },
+            },
+          },
+        },
+        nurse: true,
       },
     });
 
@@ -429,6 +437,18 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     const provider = this.getProvider(session.consultationMode);
     const token = provider.generateToken(identity, session.roomName);
 
+    const participantNames: Record<string, string> = {};
+    if (session.doctor.twilioIdentity) {
+      participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Doctor';
+    }
+    const patientIdentity = `patient_${session.sessionId}_${session.patientId.slice(0, 8)}`;
+    participantNames[patientIdentity] =
+      session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
+    if (session.nurseId) {
+      const nurseIdentity = `nurse_${session.sessionId}_${session.nurseId.slice(0, 8)}`;
+      participantNames[nurseIdentity] = session.nurse?.name ?? 'Nurse';
+    }
+
     return {
       token,
       roomName: session.roomName,
@@ -436,6 +456,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       sessionId: session.sessionId,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      participantNames,
     };
   }
 
@@ -449,6 +470,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
             patientProfile: true,
           },
         },
+        nurse: true,
       },
     });
 
@@ -498,6 +520,17 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     const provider = this.getProvider(session.consultationMode);
     const token = provider.generateToken(identity, session.roomName);
 
+    const participantNames: Record<string, string> = {};
+    if (session.doctor.twilioIdentity) {
+      participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Doctor';
+    }
+    const patientIdentityKey = `patient_${session.sessionId}_${session.patientId.slice(0, 8)}`;
+    participantNames[patientIdentityKey] = patientName;
+    if (session.nurseId) {
+      const nurseIdentity = `nurse_${session.sessionId}_${session.nurseId.slice(0, 8)}`;
+      participantNames[nurseIdentity] = session.nurse?.name ?? 'Nurse';
+    }
+
     return {
       token,
       roomName: session.roomName,
@@ -507,6 +540,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       patientName,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      participantNames,
     };
   }
 
@@ -514,6 +548,14 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     const session = await this.prisma.consultationSession.findUnique({
       where: { sessionId },
       include: {
+        doctor: true,
+        patient: {
+          include: {
+            patientProfile: {
+              select: { fullName: true },
+            },
+          },
+        },
         nurse: {
           include: {
             nurseProfile: {
@@ -561,6 +603,16 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     const provider = this.getProvider(session.consultationMode);
     const token = provider.generateToken(identity, session.roomName);
 
+    const participantNames: Record<string, string> = {};
+    if (session.doctor?.twilioIdentity) {
+      participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Doctor';
+    }
+    const patientIdentity = `patient_${session.sessionId}_${session.patientId.slice(0, 8)}`;
+    participantNames[patientIdentity] =
+      session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
+    const nurseIdentity = `nurse_${session.sessionId}_${nurseId.slice(0, 8)}`;
+    participantNames[nurseIdentity] = session.nurse?.name ?? 'Nurse';
+
     return {
       token,
       roomName: session.roomName,
@@ -568,6 +620,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       sessionId: session.sessionId,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      participantNames,
     };
   }
 
