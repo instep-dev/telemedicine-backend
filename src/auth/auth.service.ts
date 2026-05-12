@@ -98,7 +98,7 @@ type ProfileWithUser =
 export class AuthService {
   constructor(private prisma: PrismaService, private jwt: JwtService) {}
 
-  private accessTtl = process.env.JWT_ACCESS_TTL || "15m";
+  private accessTtl = process.env.JWT_ACCESS_TTL || "60m";
   private refreshTtl = process.env.JWT_REFRESH_TTL || "30d";
 
   private frontendBaseUrl = process.env.APP_PUBLIC_BASE_URL || "http://localhost:3000";
