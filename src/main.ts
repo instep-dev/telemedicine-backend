@@ -20,13 +20,18 @@ async function bootstrap() {
   app.use(express.urlencoded({ extended: true }));
   app.use(express.json());
 
- app.enableCors({
-  origin: [
-    'http://localhost:3000',
-    process.env.APP_PUBLIC_BASE_URL,
-  ],
-  credentials: true,
-});
+  const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN ?? 'telemedicine.instep.id';
+  app.enableCors({
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed =
+        /^https?:\/\/([a-z0-9-]+\.)?localhost(:\d+)?$/.test(origin) ||
+        origin === process.env.APP_PUBLIC_BASE_URL ||
+        new RegExp(`^https://[a-z0-9-]+\\.${baseDomain.replace('.', '\\.')}$`).test(origin);
+      callback(allowed ? null : new Error('CORS: origin not allowed'), allowed);
+    },
+    credentials: true,
+  });
 
   app.useGlobalPipes(
     new ValidationPipe({

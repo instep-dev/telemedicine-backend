@@ -20,9 +20,16 @@ import { AiService } from 'src/ai-summary/ai.service';
 import { LocalStorageService } from 'src/video/local-storage.service';
 import { PrismaService } from 'prisma/prisma.service';
 import { ConsultationsService } from '../consultations/consultations.service';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { VideoTranscriptionDto } from './dto/twilio.dto';
 import { VideoCallService } from './videocall.service';
 import { VoiceCallService } from './voicecall.service';
+
+interface TenantRow {
+  id: string;
+  slug: string;
+  schema_name: string;
+}
 
 @Injectable()
 export class TwilioService implements OnModuleInit, OnModuleDestroy {
@@ -45,7 +52,6 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
-    // Auto-fail / auto-complete scheduled sessions based on scheduled_end_time.
     this.autoEndTimer = setInterval(() => {
       void this.runAutoEndCycle();
     }, 30_000);
@@ -57,6 +63,44 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       this.autoEndTimer = null;
     }
   }
+
+  // ─── Tenant helpers ──────────────────────────────────────────────────────────
+
+  private async getAllActiveTenants(): Promise<TenantContext[]> {
+    const rows = await this.prisma.$queryRaw<TenantRow[]>`
+      SELECT id, slug, schema_name FROM public.tenant_registry WHERE status = 'active'
+    `;
+    return rows.map((r) => ({ id: r.id, slug: r.slug, schemaName: r.schema_name }));
+  }
+
+  async findSessionWithTenant(
+    roomSid?: string,
+    roomName?: string,
+  ): Promise<{ session: any; tenant: TenantContext } | null> {
+    const tenants = await this.getAllActiveTenants();
+    for (const tenant of tenants) {
+      const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        if (roomSid) {
+          const bySid = await tx.consultationSession.findFirst({
+            where: { twilioRoomSid: roomSid },
+            include: { doctor: true },
+          });
+          if (bySid) return bySid;
+        }
+        if (roomName) {
+          return tx.consultationSession.findFirst({
+            where: { roomName },
+            include: { doctor: true },
+          });
+        }
+        return null;
+      });
+      if (session) return { session, tenant };
+    }
+    return null;
+  }
+
+  // ─── Shared helpers ──────────────────────────────────────────────────────────
 
   private getProvider(mode: ConsultationMode) {
     if (mode === ConsultationMode.VOICE) return this.voiceCallService;
@@ -108,58 +152,66 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     return { durationSec: diffSec, durationMinutes: diffMin };
   }
 
-  private async ensureRoom(session: {
-    consultationMode: ConsultationMode;
-    roomName: string;
-    sessionId: string;
-  }) {
+  private async ensureRoom(
+    session: {
+      consultationMode: ConsultationMode;
+      roomName: string;
+      sessionId: string;
+    },
+    tenant: TenantContext,
+  ) {
     const provider = this.getProvider(session.consultationMode);
     const room = await provider.ensureRoom(session.roomName, this.statusCallbackUrl);
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId: session.sessionId },
-      data: {
-        twilioRoomSid: room.sid ?? undefined,
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: { twilioRoomSid: room.sid ?? undefined },
+      });
     });
 
     return room;
   }
+
+  // ─── Auto-end cycle (background) ────────────────────────────────────────────
 
   private async runAutoEndCycle() {
     if (this.autoEndRunning) return;
     this.autoEndRunning = true;
 
     try {
-      const now = new Date();
-      const dueSessions = await this.prisma.consultationSession.findMany({
-        where: {
-          sessionType: 'SCHEDULED',
-          sessionStatus: {
-            in: ['CREATED', 'IN_CALL'],
-          },
-          scheduledEndTime: {
-            lte: now,
-          },
-        },
-        select: {
-          sessionId: true,
-          doctorId: true,
-          doctorJoinedAt: true,
-          patientJoinedAt: true,
-        },
-      });
+      const tenants = await this.getAllActiveTenants();
 
-      for (const session of dueSessions) {
-        if (session.doctorJoinedAt && session.patientJoinedAt) {
-          await this.completeSessionInternal(
-            session.sessionId,
-            session.doctorId,
-            'AUTO_END_COMPLETED',
-            true,
-          );
-        } else {
-          await this.failSessionInternal(session.sessionId, 'AUTO_END_FAILED', true);
+      for (const tenant of tenants) {
+        const now = new Date();
+        const dueSessions = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+          return tx.consultationSession.findMany({
+            where: {
+              sessionType: 'SCHEDULED',
+              sessionStatus: { in: ['CREATED', 'IN_CALL'] },
+              scheduledEndTime: { lte: now },
+            },
+            select: {
+              sessionId: true,
+              doctorId: true,
+              doctorJoinedAt: true,
+              patientJoinedAt: true,
+            },
+          });
+        });
+
+        for (const session of dueSessions) {
+          if (session.doctorJoinedAt && session.patientJoinedAt) {
+            await this.completeSessionInternal(
+              session.sessionId,
+              session.doctorId,
+              'AUTO_END_COMPLETED',
+              true,
+              tenant,
+            );
+          } else {
+            await this.failSessionInternal(session.sessionId, 'AUTO_END_FAILED', true, tenant);
+          }
         }
       }
     } catch (error: any) {
@@ -169,26 +221,25 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ─── Session completion internals ────────────────────────────────────────────
+
   private async completeSessionInternal(
     sessionId: string,
     doctorId: string,
     action: string,
     isSystem: boolean,
+    tenant: TenantContext,
   ) {
-    const session = await this.prisma.consultationSession.findUnique({
-      where: { sessionId },
-      include: {
-        doctor: true,
-      },
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findUnique({
+        where: { sessionId },
+        include: { doctor: true },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
     if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') {
-      return {
-        success: true,
-        sessionId,
-        status: session.sessionStatus,
-      };
+      return { success: true, sessionId, status: session.sessionStatus };
     }
 
     const endedAt = new Date();
@@ -206,56 +257,54 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     const baseStart = session.startedAt ?? session.doctorJoinedAt ?? endedAt;
     const { durationMinutes, durationSec } = this.calculateDuration(baseStart, endedAt);
 
-    const updated = await this.prisma.consultationSession.update({
-      where: { sessionId },
-      data: {
-        sessionStatus: 'COMPLETED',
-        endedAt,
-        durationMinutes,
-        durationSec,
-        ...(session.sessionType === 'INSTANT' && !session.scheduledEndTime
-          ? {
-              scheduledEndTime: endedAt,
-            }
-          : {}),
-      },
-    });
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId },
+        data: {
+          sessionStatus: 'COMPLETED',
+          endedAt,
+          durationMinutes,
+          durationSec,
+          ...(session.sessionType === 'INSTANT' && !session.scheduledEndTime
+            ? { scheduledEndTime: endedAt }
+            : {}),
+        },
+      });
 
-    await this.prisma.consultationNote.upsert({
-      where: { consultationSessionId: updated.sessionId },
-      update: {
-        doctorId: session.doctorId,
-        nurseId: session.nurseId ?? null,
-        aiStatus: 'PENDING',
-        aiError: null,
-      },
-      create: {
-        consultationSessionId: updated.sessionId,
-        doctorId: session.doctorId,
-        patientId: session.patientId,
-        nurseId: session.nurseId ?? null,
-        aiStatus: 'PENDING',
-        aiError: null,
-      },
-    });
+      await tx.consultationNote.upsert({
+        where: { consultationSessionId: session.sessionId },
+        update: {
+          doctorId: session.doctorId,
+          nurseId: session.nurseId ?? null,
+          aiStatus: 'PENDING',
+          aiError: null,
+        },
+        create: {
+          consultationSessionId: session.sessionId,
+          tenantId: session.tenantId,
+          doctorId: session.doctorId,
+          patientId: session.patientId,
+          nurseId: session.nurseId ?? null,
+          aiStatus: 'PENDING',
+          aiError: null,
+        },
+      });
 
-    await this.consultationsService.createAudit({
-      consultationSessionId: session.sessionId,
-      action,
-      actorUserId: isSystem ? null : doctorId,
-      actorRole: isSystem ? null : UserRole.DOCTOR,
-      previousStatus: session.sessionStatus,
-      newStatus: SessionStatus.COMPLETED,
-      metadata: {
-        durationMinutes,
-        auto: isSystem,
-      },
+      await this.consultationsService.createAudit(tx, tenant.id, {
+        consultationSessionId: session.sessionId,
+        action,
+        actorUserId: isSystem ? null : doctorId,
+        actorRole: isSystem ? null : UserRole.DOCTOR,
+        previousStatus: session.sessionStatus,
+        newStatus: SessionStatus.COMPLETED,
+        metadata: { durationMinutes, auto: isSystem },
+      });
     });
 
     this.runInBackground(
       `ai-summary:${session.sessionId}`,
       async () => {
-        await this.aiService.processConsultationFromTranscript(session.sessionId);
+        await this.aiService.processConsultationFromTranscript(session.sessionId, undefined, tenant);
       },
       1500,
     );
@@ -269,21 +318,26 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  private async failSessionInternal(sessionId: string, action: string, isSystem: boolean) {
-    const session = await this.prisma.consultationSession.findUnique({
-      where: { sessionId },
-      select: {
-        sessionId: true,
-        sessionStatus: true,
-        scheduledEndTime: true,
-        twilioRoomSid: true,
-      },
+  private async failSessionInternal(
+    sessionId: string,
+    action: string,
+    isSystem: boolean,
+    tenant: TenantContext,
+  ) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findUnique({
+        where: { sessionId },
+        select: {
+          sessionId: true,
+          sessionStatus: true,
+          scheduledEndTime: true,
+          twilioRoomSid: true,
+        },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
-    if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') {
-      return;
-    }
+    if (session.sessionStatus === 'COMPLETED' || session.sessionStatus === 'FAILED') return;
 
     if (session.twilioRoomSid) {
       try {
@@ -295,105 +349,102 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       }
     }
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId },
-      data: {
-        sessionStatus: 'FAILED',
-        endedAt: session.scheduledEndTime ?? new Date(),
-        durationMinutes: null,
-        durationSec: null,
-      },
-    });
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId },
+        data: {
+          sessionStatus: 'FAILED',
+          endedAt: session.scheduledEndTime ?? new Date(),
+          durationMinutes: null,
+          durationSec: null,
+        },
+      });
 
-    await this.consultationsService.createAudit({
-      consultationSessionId: session.sessionId,
-      action,
-      actorUserId: null,
-      actorRole: null,
-      previousStatus: session.sessionStatus,
-      newStatus: SessionStatus.FAILED,
-      metadata: {
-        auto: isSystem,
-      },
+      await this.consultationsService.createAudit(tx, tenant.id, {
+        consultationSessionId: session.sessionId,
+        action,
+        actorUserId: null,
+        actorRole: null,
+        previousStatus: session.sessionStatus,
+        newStatus: SessionStatus.FAILED,
+        metadata: { auto: isSystem },
+      });
     });
   }
 
-  async markSessionFailedBySystem(sessionId: string, action = 'AUTO_END_FAILED') {
-    return this.failSessionInternal(sessionId, action, true);
+  async markSessionFailedBySystem(
+    sessionId: string,
+    tenant: TenantContext,
+    action = 'AUTO_END_FAILED',
+  ) {
+    return this.failSessionInternal(sessionId, action, true, tenant);
   }
 
   async markSessionCompletedBySystem(
     sessionId: string,
     doctorId: string,
+    tenant: TenantContext,
     action = 'AUTO_END_COMPLETED',
   ) {
-    return this.completeSessionInternal(sessionId, doctorId, action, true);
+    return this.completeSessionInternal(sessionId, doctorId, action, true, tenant);
   }
 
-  async doctorToken(doctorId: string, sessionId: string) {
-    const session = await this.prisma.consultationSession.findUnique({
-      where: { sessionId },
-      include: {
-        doctor: {
-          include: {
-            doctorProfile: {
-              select: {
-                license: true,
-              },
+  // ─── Token methods ───────────────────────────────────────────────────────────
+
+  async doctorToken(doctorId: string, sessionId: string, tenant: TenantContext) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findUnique({
+        where: { sessionId },
+        include: {
+          doctor: {
+            include: {
+              doctorProfile: { select: { license: true } },
             },
           },
-        },
-        patient: {
-          include: {
-            patientProfile: {
-              select: { fullName: true },
+          patient: {
+            include: {
+              patientProfile: { select: { fullName: true } },
             },
           },
+          nurse: true,
         },
-        nurse: true,
-      },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
 
-    await this.consultationsService.createAudit({
+    await this.consultationsService.createAuditForTenant(tenant, {
       consultationSessionId: session.sessionId,
       action: 'DOCTOR_JOIN_ATTEMPT',
       actorUserId: doctorId,
       actorRole: UserRole.DOCTOR,
       previousStatus: session.sessionStatus,
       newStatus: session.sessionStatus,
-      metadata: {
-        consultationMode: session.consultationMode,
-      },
+      metadata: { consultationMode: session.consultationMode },
     });
 
     if (session.doctorId !== doctorId) {
-      await this.consultationsService.createAudit({
+      await this.consultationsService.createAuditForTenant(tenant, {
         consultationSessionId: session.sessionId,
         action: 'DOCTOR_JOIN_DENIED',
         actorUserId: doctorId,
         actorRole: UserRole.DOCTOR,
         previousStatus: session.sessionStatus,
         newStatus: session.sessionStatus,
-        metadata: {
-          reason: 'NOT_ASSIGNED_DOCTOR',
-        },
+        metadata: { reason: 'NOT_ASSIGNED_DOCTOR' },
       });
       throw new ForbiddenException('Bukan session dokter ini');
     }
 
     if (!session.doctor.doctorProfile?.license?.trim()) {
-      await this.consultationsService.createAudit({
+      await this.consultationsService.createAuditForTenant(tenant, {
         consultationSessionId: session.sessionId,
         action: 'DOCTOR_JOIN_DENIED',
         actorUserId: doctorId,
         actorRole: UserRole.DOCTOR,
         previousStatus: session.sessionStatus,
         newStatus: session.sessionStatus,
-        metadata: {
-          reason: 'DOCTOR_LICENSE_EMPTY',
-        },
+        metadata: { reason: 'DOCTOR_LICENSE_EMPTY' },
       });
       throw new ForbiddenException('Dokter tanpa license tidak bisa join');
     }
@@ -405,33 +456,32 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       throw new BadRequestException('Twilio identity dokter belum tersedia');
     }
 
-    await this.ensureRoom(session);
+    await this.ensureRoom(session, tenant);
 
     const now = new Date();
     const isRejoin = !!session.doctorJoinedAt;
     const startedAt = !session.startedAt && session.patientJoinedAt ? now : session.startedAt;
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId: session.sessionId },
-      data: {
-        doctorIdentity: identity,
-        doctorJoinedAt: session.doctorJoinedAt ?? now,
-        sessionStatus: 'IN_CALL',
-        startedAt: startedAt ?? undefined,
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: {
+          doctorIdentity: identity,
+          doctorJoinedAt: session.doctorJoinedAt ?? now,
+          sessionStatus: 'IN_CALL',
+          startedAt: startedAt ?? undefined,
+        },
+      });
     });
 
-    await this.consultationsService.createAudit({
+    await this.consultationsService.createAuditForTenant(tenant, {
       consultationSessionId: session.sessionId,
       action: isRejoin ? 'DOCTOR_REJOIN' : 'DOCTOR_JOIN_SUCCESS',
       actorUserId: doctorId,
       actorRole: UserRole.DOCTOR,
       previousStatus: session.sessionStatus,
       newStatus: SessionStatus.IN_CALL,
-      metadata: {
-        consultationMode: session.consultationMode,
-        rejoin: isRejoin,
-      },
+      metadata: { consultationMode: session.consultationMode, rejoin: isRejoin },
     });
 
     const provider = this.getProvider(session.consultationMode);
@@ -460,18 +510,16 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async patientToken(patientId: string, sessionId: string, _clientIp?: string | null) {
-    const session = await this.prisma.consultationSession.findUnique({
-      where: { sessionId },
-      include: {
-        doctor: true,
-        patient: {
-          include: {
-            patientProfile: true,
-          },
+  async patientToken(patientId: string, sessionId: string, tenant: TenantContext, _clientIp?: string | null) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findUnique({
+        where: { sessionId },
+        include: {
+          doctor: true,
+          patient: { include: { patientProfile: true } },
+          nurse: true,
         },
-        nurse: true,
-      },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
@@ -481,40 +529,37 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     this.assertJoinWindow(session);
 
-    await this.ensureRoom(session);
+    await this.ensureRoom(session, tenant);
 
     const identity = `patient_${session.sessionId}_${patientId.slice(0, 8)}`.slice(0, 128);
     const patientName =
-      session.patient.patientProfile?.fullName ??
-      session.patient.name ??
-      'Patient';
+      session.patient.patientProfile?.fullName ?? session.patient.name ?? 'Patient';
 
     const now = new Date();
     const isRejoin = !!session.patientJoinedAt;
     const startedAt = !session.startedAt && session.doctorJoinedAt ? now : session.startedAt;
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId: session.sessionId },
-      data: {
-        patientIdentity: identity,
-        patientName,
-        patientJoinedAt: session.patientJoinedAt ?? now,
-        sessionStatus: 'IN_CALL',
-        startedAt: startedAt ?? undefined,
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: {
+          patientIdentity: identity,
+          patientName,
+          patientJoinedAt: session.patientJoinedAt ?? now,
+          sessionStatus: 'IN_CALL',
+          startedAt: startedAt ?? undefined,
+        },
+      });
     });
 
-    await this.consultationsService.createAudit({
+    await this.consultationsService.createAuditForTenant(tenant, {
       consultationSessionId: session.sessionId,
       action: isRejoin ? 'PATIENT_REJOIN' : 'PATIENT_JOIN_SUCCESS',
       actorUserId: patientId,
       actorRole: UserRole.PATIENT,
       previousStatus: session.sessionStatus,
       newStatus: SessionStatus.IN_CALL,
-      metadata: {
-        consultationMode: session.consultationMode,
-        rejoin: isRejoin,
-      },
+      metadata: { consultationMode: session.consultationMode, rejoin: isRejoin },
     });
 
     const provider = this.getProvider(session.consultationMode);
@@ -544,26 +589,20 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async nurseToken(nurseId: string, sessionId: string) {
-    const session = await this.prisma.consultationSession.findUnique({
-      where: { sessionId },
-      include: {
-        doctor: true,
-        patient: {
-          include: {
-            patientProfile: {
-              select: { fullName: true },
-            },
+  async nurseToken(nurseId: string, sessionId: string, tenant: TenantContext) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findUnique({
+        where: { sessionId },
+        include: {
+          doctor: true,
+          patient: {
+            include: { patientProfile: { select: { fullName: true } } },
+          },
+          nurse: {
+            include: { nurseProfile: { select: { nurseId: true } } },
           },
         },
-        nurse: {
-          include: {
-            nurseProfile: {
-              select: { nurseId: true },
-            },
-          },
-        },
-      },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
@@ -573,31 +612,30 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
     this.assertJoinWindow(session);
 
-    await this.ensureRoom(session);
+    await this.ensureRoom(session, tenant);
 
     const identity = `nurse_${session.sessionId}_${nurseId.slice(0, 8)}`.slice(0, 128);
     const now = new Date();
     const isRejoin = !!session.nurseJoinedAt;
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId: session.sessionId },
-      data: {
-        nurseIdentity: identity,
-        nurseJoinedAt: session.nurseJoinedAt ?? now,
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: {
+          nurseIdentity: identity,
+          nurseJoinedAt: session.nurseJoinedAt ?? now,
+        },
+      });
     });
 
-    await this.consultationsService.createAudit({
+    await this.consultationsService.createAuditForTenant(tenant, {
       consultationSessionId: session.sessionId,
       action: isRejoin ? 'NURSE_REJOIN' : 'NURSE_JOIN_SUCCESS',
       actorUserId: nurseId,
       actorRole: UserRole.NURSE,
       previousStatus: session.sessionStatus,
       newStatus: session.sessionStatus,
-      metadata: {
-        consultationMode: session.consultationMode,
-        rejoin: isRejoin,
-      },
+      metadata: { consultationMode: session.consultationMode, rejoin: isRejoin },
     });
 
     const provider = this.getProvider(session.consultationMode);
@@ -624,26 +662,22 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async completeConsultationRoom(sessionId: string, doctorId: string) {
-    return this.completeSessionInternal(sessionId, doctorId, 'DOCTOR_END_CALL', false);
+  async completeConsultationRoom(sessionId: string, doctorId: string, tenant: TenantContext) {
+    return this.completeSessionInternal(sessionId, doctorId, 'DOCTOR_END_CALL', false, tenant);
   }
 
-  async getCallSessionResult(doctorId: string, sessionId: string) {
-    const session = await this.prisma.consultationSession.findFirst({
-      where: {
-        sessionId,
-        doctorId,
-      },
+  async getCallSessionResult(doctorId: string, sessionId: string, tenant: TenantContext) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findFirst({
+        where: { sessionId, doctorId },
+      });
     });
 
     if (!session) throw new NotFoundException('Session tidak ditemukan');
 
     let playableUrl: string | null = session.mediaUrl ?? null;
     if (!playableUrl && session.compositionSid) {
-      playableUrl = await this.videoCallService.getCompositionMediaUrl(
-        session.compositionSid,
-        3600,
-      );
+      playableUrl = await this.videoCallService.getCompositionMediaUrl(session.compositionSid, 3600);
     }
 
     return {
@@ -655,30 +689,21 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
-  async saveTranscription(doctorId: string, payload: VideoTranscriptionDto) {
+  async saveTranscription(doctorId: string, payload: VideoTranscriptionDto, tenant: TenantContext) {
     const sessionId = payload.sessionId?.trim();
     const transcription = payload.transcription?.trim();
 
-    if (!sessionId) {
-      throw new BadRequestException('sessionId wajib');
-    }
-    if (!transcription) {
-      return { success: true, ignored: true };
-    }
+    if (!sessionId) throw new BadRequestException('sessionId wajib');
+    if (!transcription) return { success: true, ignored: true };
 
-    const session = await this.prisma.consultationSession.findFirst({
-      where: {
-        sessionId,
-        doctorId,
-      },
-      include: {
-        consultationNote: true,
-      },
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findFirst({
+        where: { sessionId, doctorId },
+        include: { consultationNote: true },
+      });
     });
 
-    if (!session) {
-      throw new NotFoundException('Session tidak ditemukan');
-    }
+    if (!session) throw new NotFoundException('Session tidak ditemukan');
 
     const existing = session.consultationNote?.transcriptRaw ?? '';
     const currentStatus = String(session.consultationNote?.aiStatus ?? '').toUpperCase();
@@ -688,35 +713,36 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
         : 'TRANSCRIBING';
     const nextTranscript = existing ? `${existing}\n${transcription}` : transcription;
 
-    await this.prisma.consultationNote.upsert({
-      where: { consultationSessionId: sessionId },
-      update: {
-        doctorId,
-        nurseId: session.nurseId ?? null,
-        transcriptRaw: nextTranscript,
-        transcribedAt: new Date(),
-        ...(nextStatus ? { aiStatus: nextStatus, aiError: null } : {}),
-      },
-      create: {
-        consultationSessionId: sessionId,
-        doctorId,
-        patientId: session.patientId,
-        nurseId: session.nurseId ?? null,
-        transcriptRaw: nextTranscript,
-        transcribedAt: new Date(),
-        aiStatus: nextStatus ?? 'TRANSCRIBING',
-        aiError: null,
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationNote.upsert({
+        where: { consultationSessionId: sessionId },
+        update: {
+          doctorId,
+          nurseId: session.nurseId ?? null,
+          transcriptRaw: nextTranscript,
+          transcribedAt: new Date(),
+          ...(nextStatus ? { aiStatus: nextStatus, aiError: null } : {}),
+        },
+        create: {
+          consultationSessionId: sessionId,
+          tenantId: session.tenantId,
+          doctorId,
+          patientId: session.patientId,
+          nurseId: session.nurseId ?? null,
+          transcriptRaw: nextTranscript,
+          transcribedAt: new Date(),
+          aiStatus: nextStatus ?? 'TRANSCRIBING',
+          aiError: null,
+        },
+      });
     });
 
     return { success: true };
   }
 
-  async tryCreateComposition(roomSid: string) {
-    const session = await this.prisma.consultationSession.findFirst({
-      where: {
-        twilioRoomSid: roomSid,
-      },
+  async tryCreateComposition(roomSid: string, tenant: TenantContext) {
+    const session = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findFirst({ where: { twilioRoomSid: roomSid } });
     });
 
     if (!session) return null;
@@ -731,21 +757,21 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     if (hasPending) return null;
 
     const completed = recordings.some((item: any) => item.status === 'completed');
-    if (!completed) {
-      return null;
-    }
+    if (!completed) return null;
 
     const composition = await this.videoCallService.createComposition(
       roomSid,
       this.statusCallbackUrl,
     );
 
-    await this.prisma.consultationSession.update({
-      where: { sessionId: session.sessionId },
-      data: {
-        compositionSid: composition.sid,
-        compositionStatus: composition.status ?? 'enqueued',
-      },
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: {
+          compositionSid: composition.sid,
+          compositionStatus: composition.status ?? 'enqueued',
+        },
+      });
     });
 
     return composition;
@@ -753,9 +779,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
 
   async getCompositionMediaUrl(compositionSid: string, ttl = 3600) {
     const url = await this.videoCallService.getCompositionMediaUrl(compositionSid, ttl);
-    if (!url) {
-      throw new NotFoundException('Composition media URL not found');
-    }
+    if (!url) throw new NotFoundException('Composition media URL not found');
     return url;
   }
 

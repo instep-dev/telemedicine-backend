@@ -1,4 +1,4 @@
-import { Module } from "@nestjs/common";
+import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
 import { ConfigModule } from "@nestjs/config";
 import { EventEmitterModule } from "@nestjs/event-emitter";
 import { PrismaModule } from "prisma/prisma.module";
@@ -16,10 +16,11 @@ import { SoapNotesModule } from "./soap-notes/soap-notes.module";
 import { MulterModule } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { existsSync, mkdirSync } from "fs";
+import { TenantModule } from "./tenant/tenant.module";
+import { TenantMiddleware } from "./tenant/tenant.middleware";
 
 const uploadsDir = join(process.cwd(), "uploads", "profiles");
 
-// Ensure upload directory exists
 if (!existsSync(uploadsDir)) {
   mkdirSync(uploadsDir, { recursive: true });
 }
@@ -50,6 +51,7 @@ if (!existsSync(uploadsDir)) {
       }),
     }),
     PrismaModule,
+    TenantModule,
     AuthModule,
     ProfileModule,
     ConsultationsModule,
@@ -60,4 +62,8 @@ if (!existsSync(uploadsDir)) {
     SoapNotesModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(TenantMiddleware).forRoutes("*");
+  }
+}

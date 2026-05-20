@@ -15,6 +15,8 @@ import { UserRole } from '@prisma/client';
 import { Observable, Subject } from 'rxjs';
 import { filter, map } from 'rxjs/operators';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
+import { CurrentTenant } from '../tenant/tenant.decorator';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { AI_STATUS_UPDATED_EVENT } from '../ai-summary/ai.service';
 import type { AiStatusUpdatedPayload } from '../ai-summary/ai.service';
 import { AiResultsService } from './ai-results.service';
@@ -28,12 +30,16 @@ export class AiResultsController {
 
   @UseGuards(JwtGuard)
   @Get()
-  async findAll(@Req() req: any, @Query() query: GetAiResultsQueryDto) {
+  async findAll(
+    @Req() req: any,
+    @Query() query: GetAiResultsQueryDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role === UserRole.DOCTOR) {
-      return this.aiResultsService.findAllByDoctor(req.user.id, query);
+      return this.aiResultsService.findAllByDoctor(req.user.id, query, tenant);
     }
     if (req.user.role === UserRole.NURSE) {
-      return this.aiResultsService.findAllByNurse(req.user.id, query);
+      return this.aiResultsService.findAllByNurse(req.user.id, query, tenant);
     }
     throw new ForbiddenException('Hanya dokter atau nurse yang dapat melihat AI summary');
   }
@@ -84,12 +90,16 @@ export class AiResultsController {
 
   @UseGuards(JwtGuard)
   @Get(':id')
-  async findById(@Req() req: any, @Param('id') id: string) {
+  async findById(
+    @Req() req: any,
+    @Param('id') id: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role === UserRole.DOCTOR) {
-      return this.aiResultsService.findById(req.user.id, id);
+      return this.aiResultsService.findById(req.user.id, id, tenant);
     }
     if (req.user.role === UserRole.NURSE) {
-      return this.aiResultsService.findByIdForNurse(req.user.id, id);
+      return this.aiResultsService.findByIdForNurse(req.user.id, id, tenant);
     }
     throw new ForbiddenException('Hanya dokter atau nurse yang dapat melihat AI summary');
   }

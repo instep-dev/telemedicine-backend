@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { GetAiResultsQueryDto } from './dto/ai-results.dto';
 import { UserRole } from '@prisma/client';
 
@@ -29,7 +30,7 @@ export class AiResultsService {
     return 'newest';
   }
 
-  async findAllByDoctor(doctorId: string, query: GetAiResultsQueryDto) {
+  async findAllByDoctor(doctorId: string, query: GetAiResultsQueryDto, tenant: TenantContext) {
     const limit = this.normalizeLimit(query.limit);
     const cursor = query.cursor?.trim() || undefined;
     const search = query.search?.trim() || undefined;
@@ -53,91 +54,57 @@ export class AiResultsService {
               { plan: { contains: search, mode: 'insensitive' } },
               { transcriptRaw: { contains: search, mode: 'insensitive' } },
               { aiStatus: { contains: search, mode: 'insensitive' } },
-              {
-                consultationSession: {
-                  sessionId: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  roomName: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  patientIdentity: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  patientName: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  doctor: { name: { contains: search, mode: 'insensitive' } },
-                },
-              },
+              { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { roomName: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { patientIdentity: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
             ],
           }
         : {}),
     };
 
     if (cursor) {
-      const cursorRow = await this.prisma.consultationNote.findFirst({
-        where: {
-          id: cursor,
-          doctorId,
-        },
-        select: { id: true },
+      const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationNote.findFirst({ where: { id: cursor, doctorId }, select: { id: true } });
       });
 
-      if (!cursorRow) {
-        throw new NotFoundException('Cursor tidak ditemukan untuk doctor ini');
-      }
+      if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk doctor ini');
     }
 
-    const rows = await this.prisma.consultationNote.findMany({
-      where: whereClause,
-      take: limit + 1,
-      ...(cursor
-        ? {
-            cursor: { id: cursor },
-            skip: 1,
-          }
-        : {}),
-      orderBy,
-      include: {
-        consultationSession: {
-          select: {
-            sessionId: true,
-            sessionStatus: true,
-            roomName: true,
-            patientName: true,
-            patientIdentity: true,
-            startedAt: true,
-            endedAt: true,
-            durationSec: true,
-            twilioRoomSid: true,
-            doctorIdentity: true,
-            consultationMode: true,
-            sessionType: true,
-            recordingStatus: true,
-            compositionStatus: true,
-            mediaUrl: true,
-            mediaFormat: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            doctor: {
-              select: {
-                id: true,
-                name: true,
-              },
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findMany({
+        where: whereClause,
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        orderBy,
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              roomName: true,
+              patientName: true,
+              patientIdentity: true,
+              startedAt: true,
+              endedAt: true,
+              durationSec: true,
+              twilioRoomSid: true,
+              doctorIdentity: true,
+              consultationMode: true,
+              sessionType: true,
+              recordingStatus: true,
+              compositionStatus: true,
+              mediaUrl: true,
+              mediaFormat: true,
+              errorMessage: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
             },
           },
         },
-      },
+      });
     });
 
     const hasMore = rows.length > limit;
@@ -147,7 +114,6 @@ export class AiResultsService {
     return {
       data: items.map((item) => {
         const patientName = item.consultationSession.patientName ?? null;
-
         return {
           id: item.id,
           consultationId: item.consultationSessionId,
@@ -187,17 +153,11 @@ export class AiResultsService {
           updatedAt: item.updatedAt,
         };
       }),
-      pagination: {
-        limit,
-        nextCursor,
-        hasMore,
-        sort,
-        search: search ?? null,
-      },
+      pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
     };
   }
 
-  async findAllByNurse(nurseId: string, query: GetAiResultsQueryDto) {
+  async findAllByNurse(nurseId: string, query: GetAiResultsQueryDto, tenant: TenantContext) {
     const limit = this.normalizeLimit(query.limit);
     const cursor = query.cursor?.trim() || undefined;
     const search = query.search?.trim() || undefined;
@@ -220,65 +180,57 @@ export class AiResultsService {
               { plan: { contains: search, mode: 'insensitive' } },
               { transcriptRaw: { contains: search, mode: 'insensitive' } },
               { aiStatus: { contains: search, mode: 'insensitive' } },
-              {
-                consultationSession: {
-                  sessionId: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  patientName: { contains: search, mode: 'insensitive' },
-                },
-              },
-              {
-                consultationSession: {
-                  doctor: { name: { contains: search, mode: 'insensitive' } },
-                },
-              },
+              { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
             ],
           }
         : {}),
     };
 
     if (cursor) {
-      const cursorRow = await this.prisma.consultationNote.findFirst({
-        where: { id: cursor, consultationSession: { nurseId } },
-        select: { id: true },
+      const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationNote.findFirst({
+          where: { id: cursor, consultationSession: { nurseId } },
+          select: { id: true },
+        });
       });
       if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk nurse ini');
     }
 
-    const rows = await this.prisma.consultationNote.findMany({
-      where: whereClause,
-      take: limit + 1,
-      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      orderBy,
-      include: {
-        consultationSession: {
-          select: {
-            sessionId: true,
-            sessionStatus: true,
-            roomName: true,
-            patientName: true,
-            patientIdentity: true,
-            startedAt: true,
-            endedAt: true,
-            durationSec: true,
-            twilioRoomSid: true,
-            doctorIdentity: true,
-            consultationMode: true,
-            sessionType: true,
-            recordingStatus: true,
-            compositionStatus: true,
-            mediaUrl: true,
-            mediaFormat: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            doctor: { select: { id: true, name: true } },
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findMany({
+        where: whereClause,
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        orderBy,
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              roomName: true,
+              patientName: true,
+              patientIdentity: true,
+              startedAt: true,
+              endedAt: true,
+              durationSec: true,
+              twilioRoomSid: true,
+              doctorIdentity: true,
+              consultationMode: true,
+              sessionType: true,
+              recordingStatus: true,
+              compositionStatus: true,
+              mediaUrl: true,
+              mediaFormat: true,
+              errorMessage: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
+            },
           },
         },
-      },
+      });
     });
 
     const hasMore = rows.length > limit;
@@ -328,49 +280,56 @@ export class AiResultsService {
     };
   }
 
-  async findByIdForNurse(nurseId: string, id: string) {
-    const note = await this.prisma.consultationNote.findFirst({
-      where: { id, consultationSession: { nurseId } },
-      include: {
-        consultationSession: {
-          select: {
-            sessionId: true,
-            sessionStatus: true,
-            consultationMode: true,
-            sessionType: true,
-            roomName: true,
-            patientName: true,
-            patientIdentity: true,
-            startedAt: true,
-            endedAt: true,
-            durationSec: true,
-            twilioRoomSid: true,
-            doctorIdentity: true,
-            recordingStatus: true,
-            compositionStatus: true,
-            mediaUrl: true,
-            mediaFormat: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            doctor: { select: { id: true, name: true } },
+  async findByIdForNurse(nurseId: string, id: string, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const found = await tx.consultationNote.findFirst({
+        where: { id, consultationSession: { nurseId } },
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              consultationMode: true,
+              sessionType: true,
+              roomName: true,
+              patientName: true,
+              patientIdentity: true,
+              startedAt: true,
+              endedAt: true,
+              durationSec: true,
+              twilioRoomSid: true,
+              doctorIdentity: true,
+              recordingStatus: true,
+              compositionStatus: true,
+              mediaUrl: true,
+              mediaFormat: true,
+              errorMessage: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
+            },
           },
         },
-      },
+      });
+
+      if (found) {
+        await tx.consultationSessionAudit.create({
+          data: {
+            tenantId: tenant.id,
+            consultationSessionId: found.consultationSessionId,
+            actorUserId: nurseId,
+            actorRole: UserRole.NURSE,
+            action: 'NURSE_VIEW_SUMMARY',
+            previousStatus: found.consultationSession.sessionStatus,
+            newStatus: found.consultationSession.sessionStatus,
+          },
+        });
+      }
+
+      return found;
     });
 
     if (!note) throw new NotFoundException('AI summary tidak ditemukan');
-
-    await this.prisma.consultationSessionAudit.create({
-      data: {
-        consultationSessionId: note.consultationSessionId,
-        actorUserId: nurseId,
-        actorRole: UserRole.NURSE,
-        action: 'NURSE_VIEW_SUMMARY',
-        previousStatus: note.consultationSession.sessionStatus,
-        newStatus: note.consultationSession.sessionStatus,
-      },
-    });
 
     return {
       id: note.id,
@@ -420,59 +379,56 @@ export class AiResultsService {
     };
   }
 
-  async findById(doctorId: string, id: string) {
-    const note = await this.prisma.consultationNote.findFirst({
-      where: {
-        id,
-        doctorId,
-      },
-      include: {
-        consultationSession: {
-          select: {
-            sessionId: true,
-            sessionStatus: true,
-            consultationMode: true,
-            sessionType: true,
-            roomName: true,
-            patientName: true,
-            patientIdentity: true,
-            startedAt: true,
-            endedAt: true,
-            durationSec: true,
-            twilioRoomSid: true,
-            doctorIdentity: true,
-            recordingStatus: true,
-            compositionStatus: true,
-            mediaUrl: true,
-            mediaFormat: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            doctor: {
-              select: {
-                id: true,
-                name: true,
-              },
+  async findById(doctorId: string, id: string, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const found = await tx.consultationNote.findFirst({
+        where: { id, doctorId },
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              consultationMode: true,
+              sessionType: true,
+              roomName: true,
+              patientName: true,
+              patientIdentity: true,
+              startedAt: true,
+              endedAt: true,
+              durationSec: true,
+              twilioRoomSid: true,
+              doctorIdentity: true,
+              recordingStatus: true,
+              compositionStatus: true,
+              mediaUrl: true,
+              mediaFormat: true,
+              errorMessage: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
             },
           },
         },
-      },
+      });
+
+      if (found) {
+        await tx.consultationSessionAudit.create({
+          data: {
+            tenantId: tenant.id,
+            consultationSessionId: found.consultationSessionId,
+            actorUserId: doctorId,
+            actorRole: UserRole.DOCTOR,
+            action: 'DOCTOR_VIEW_SUMMARY',
+            previousStatus: found.consultationSession.sessionStatus,
+            newStatus: found.consultationSession.sessionStatus,
+          },
+        });
+      }
+
+      return found;
     });
 
-    if (!note) {
-      throw new NotFoundException('AI summary tidak ditemukan');
-    }
-
-    await this.prisma.consultationSessionAudit.create({
-      data: {
-        consultationSessionId: note.consultationSessionId,
-        actorUserId: doctorId,
-        actorRole: UserRole.DOCTOR,
-        action: 'DOCTOR_VIEW_SUMMARY',
-        previousStatus: note.consultationSession.sessionStatus,
-        newStatus: note.consultationSession.sessionStatus,
-      },
-    });
+    if (!note) throw new NotFoundException('AI summary tidak ditemukan');
 
     return {
       id: note.id,
@@ -522,4 +478,3 @@ export class AiResultsService {
     };
   }
 }
-

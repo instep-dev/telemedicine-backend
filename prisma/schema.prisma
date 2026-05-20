@@ -18,235 +18,156 @@ enum OAuthProvider {
   MICROSOFT
 }
 
+// ─── Tenant-specific models ───────────────────────────────────────────────────
+// All queried via SET LOCAL search_path TO tenant_xxx in PrismaService.withTenantSchema()
+
 model User {
-  id             String @id @default(uuid())
-  role         UserRole
-  name         String
-
-  // Identity unik & immutable untuk Twilio Voice JS SDK (khusus dokter)
-  twilioIdentity String? @unique
-
-  isActive        Boolean   @default(true)
+  id             String    @id @default(uuid())
+  tenantId       String
+  role           UserRole
+  name           String
+  twilioIdentity String?
+  isActive       Boolean   @default(true)
   emailVerifiedAt DateTime?
 
-  doctorProfile DoctorProfile?
-  adminProfile  AdminProfile?
+  doctorProfile  DoctorProfile?
+  adminProfile   AdminProfile?
   patientProfile PatientProfile?
-  nurseProfile  NurseProfile?
+  nurseProfile   NurseProfile?
 
-  refreshTokens      RefreshToken[]
+  refreshTokens                 RefreshToken[]
   consultationSessionsAsDoctor  ConsultationSession[]      @relation("ConsultationSessionDoctor")
   consultationSessionsAsPatient ConsultationSession[]      @relation("ConsultationSessionPatient")
   consultationSessionsCreated   ConsultationSession[]      @relation("ConsultationSessionCreatedBy")
   consultationSessionsAsNurse   ConsultationSession[]      @relation("ConsultationSessionNurse")
   consultationSessionAudits     ConsultationSessionAudit[] @relation("ConsultationSessionActor")
-  consultationNotesAsDoctor  ConsultationNote[] @relation("ConsultationNoteDoctor")
-  consultationNotesAsPatient ConsultationNote[] @relation("ConsultationNotePatient")
-  consultationNotesAsNurse   ConsultationNote[] @relation("ConsultationNoteNurse")
-  oauthAccounts      OauthAccount[]
-  authAuditLogs      AuthAuditLog[]
-  pendingEmailChanges PendingEmailChange[]
-  pendingPasswordResets PendingPasswordReset[]
+  consultationNotesAsDoctor     ConsultationNote[]         @relation("ConsultationNoteDoctor")
+  consultationNotesAsPatient    ConsultationNote[]         @relation("ConsultationNotePatient")
+  consultationNotesAsNurse      ConsultationNote[]         @relation("ConsultationNoteNurse")
+  oauthAccounts                 OauthAccount[]
+  authAuditLogs                 AuthAuditLog[]
+  pendingEmailChanges           PendingEmailChange[]
+  pendingPasswordResets         PendingPasswordReset[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([twilioIdentity, tenantId])
+  @@index([tenantId])
+  @@index([tenantId, role])
   @@index([role])
   @@index([isActive])
 }
 
 model DoctorProfile {
-  id       String @id @default(uuid())
-  userId   String @unique
-  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id           String  @id @default(uuid())
+  tenantId     String
+  userId       String  @unique
+  user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fullName String
-  email    String @unique
-  phone    String @unique
-  passwordHash String?
-
-  license  String @unique
+  fullName       String
+  email          String
+  phone          String
+  passwordHash   String?
+  license        String
   profilePicture String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([email, tenantId])
+  @@unique([phone, tenantId])
+  @@unique([license, tenantId])
+  @@index([tenantId])
   @@index([license])
 }
 
 model AdminProfile {
   id      String @id @default(uuid())
+  tenantId String
   userId  String @unique
   user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fullName String
-  email    String @unique
-  phone    String @unique
-  passwordHash String?
-
-  adminId String @unique
+  fullName       String
+  email          String
+  phone          String
+  passwordHash   String?
+  adminId        String
   profilePicture String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([email, tenantId])
+  @@unique([phone, tenantId])
+  @@unique([adminId, tenantId])
+  @@index([tenantId])
   @@index([adminId])
 }
 
 model PatientProfile {
-  id       String   @id @default(uuid())
-  userId   String   @unique
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id       String @id @default(uuid())
+  tenantId String
+  userId   String @unique
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fullName String
-  email    String @unique
-  phone    String @unique
-  passwordHash String?
-
-  bornDate DateTime
+  fullName       String
+  email          String
+  phone          String
+  passwordHash   String?
+  bornDate       DateTime
   profilePicture String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@unique([email, tenantId])
+  @@unique([phone, tenantId])
+  @@index([tenantId])
 }
 
 model NurseProfile {
   id       String @id @default(uuid())
+  tenantId String
   userId   String @unique
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fullName String
-  email    String @unique
-  phone    String @unique
-  passwordHash String?
-
-  nurseId  String @unique
+  fullName       String
+  email          String
+  phone          String
+  passwordHash   String?
+  nurseId        String
   profilePicture String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@unique([email, tenantId])
+  @@unique([phone, tenantId])
+  @@unique([nurseId, tenantId])
+  @@index([tenantId])
   @@index([nurseId])
 }
 
 model OauthAccount {
-  id              String        @id @default(uuid())
-  userId          String
-  user            User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  provider        OAuthProvider
-  providerUserId  String
-  email           String?
-  createdAt       DateTime @default(now())
+  id             String        @id @default(uuid())
+  tenantId       String
+  userId         String
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider       OAuthProvider
+  providerUserId String
+  email          String?
+  createdAt      DateTime      @default(now())
 
-  @@unique([provider, providerUserId])
+  @@unique([provider, providerUserId, tenantId])
+  @@index([tenantId])
   @@index([userId])
   @@map("OAuthAccount")
 }
 
-model OauthState {
-  id         String        @id @default(uuid())
-  provider   OAuthProvider
-  role       UserRole
-  redirectUrl String?
-  expiresAt  DateTime
-  createdAt  DateTime @default(now())
-
-  @@index([expiresAt])
-  @@map("OAuthState")
-}
-
-model OauthPending {
-  id             String        @id @default(uuid())
-  provider       OAuthProvider
-  role           UserRole
-  providerUserId String
-  email          String
-  name           String?
-  expiresAt      DateTime
-  createdAt      DateTime @default(now())
-
-  @@unique([provider, providerUserId])
-  @@index([email])
-  @@index([expiresAt])
-  @@map("OAuthPending")
-}
-
-model PendingRegistration {
-  id           String   @id @default(uuid())
-  role         UserRole
-  email        String
-  phone        String
-  name         String
-  passwordHash String
-
-  license  String?
-  adminId  String?
-  nurseId  String?
-  bornDate DateTime?
-
-  tokenHash String  @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([email])
-  @@index([phone])
-  @@index([expiresAt])
-}
-
-model LicenseWhitelist {
-  id        String   @id @default(uuid())
-  license   String   @unique
-  createdAt DateTime @default(now())
-}
-
-model AdminIdWhitelist {
-  id        String   @id @default(uuid())
-  adminId   String   @unique
-  createdAt DateTime @default(now())
-}
-
-model NurseIdWhitelist {
-  id        String   @id @default(uuid())
-  nurseId   String   @unique
-  createdAt DateTime @default(now())
-}
-
-model PendingEmailChange {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  newEmail  String
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  
-  @@index([userId])
-  @@index([expiresAt])
-  @@index([newEmail])
-}
-
-model PendingPasswordReset {
-  id        String   @id @default(uuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  
-  @@index([userId])
-  @@index([expiresAt])
-}
-
-model MrnWhitelist {
-  id        String   @id @default(uuid())
-  mrn       String   @unique
-  createdAt DateTime @default(now())
-}
-
 model RefreshToken {
   id       String @id @default(uuid())
+  tenantId String
   userId   String
   user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -263,13 +184,110 @@ model RefreshToken {
   expiresAt DateTime
   createdAt DateTime @default(now())
 
+  @@index([tenantId])
   @@index([userId])
   @@index([expiresAt])
   @@index([revokedAt])
 }
 
+model PendingEmailChange {
+  id       String @id @default(uuid())
+  tenantId String
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  newEmail  String
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([expiresAt])
+  @@index([newEmail])
+}
+
+model PendingPasswordReset {
+  id       String @id @default(uuid())
+  tenantId String
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model LicenseWhitelist {
+  id        String   @id @default(uuid())
+  tenantId  String
+  license   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([license, tenantId])
+  @@index([tenantId])
+}
+
+model AdminIdWhitelist {
+  id        String   @id @default(uuid())
+  tenantId  String
+  adminId   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([adminId, tenantId])
+  @@index([tenantId])
+}
+
+model NurseIdWhitelist {
+  id        String   @id @default(uuid())
+  tenantId  String
+  nurseId   String
+
+  createdAt DateTime @default(now())
+
+  @@unique([nurseId, tenantId])
+  @@index([tenantId])
+}
+
+model MrnWhitelist {
+  id        String   @id @default(uuid())
+  tenantId  String
+  mrn       String
+
+  createdAt DateTime @default(now())
+
+  @@unique([mrn, tenantId])
+  @@index([tenantId])
+}
+
+model AuthAuditLog {
+  id        String     @id @default(uuid())
+  tenantId  String
+  userId    String?
+  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
+  email     String?
+  action    AuthAction
+  success   Boolean    @default(false)
+  ip        String?
+  userAgent String?
+  createdAt DateTime   @default(now())
+
+  @@index([tenantId])
+  @@index([tenantId, createdAt])
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
+}
+
 model ConsultationSession {
   sessionId String @id @map("session_id")
+  tenantId  String
 
   patientId String @map("patient_id")
   patient   User   @relation("ConsultationSessionPatient", fields: [patientId], references: [id], onDelete: Restrict)
@@ -290,14 +308,13 @@ model ConsultationSession {
   createdBy      String @map("created_by")
   createdByAdmin User   @relation("ConsultationSessionCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
 
-  nurseId   String? @map("nurse_id")
-  nurse     User?   @relation("ConsultationSessionNurse", fields: [nurseId], references: [id], onDelete: SetNull)
+  nurseId String? @map("nurse_id")
+  nurse   User?   @relation("ConsultationSessionNurse", fields: [nurseId], references: [id], onDelete: SetNull)
 
-  // Twilio technical data retained from old Consultation + CallSession.
-  roomName      String  @unique @map("room_name")
-  twilioRoomSid String? @unique @map("twilio_room_sid")
+  roomName      String  @map("room_name")
+  twilioRoomSid String? @map("twilio_room_sid")
 
-  doctorIdentity String? @map("doctor_identity")
+  doctorIdentity  String? @map("doctor_identity")
   patientIdentity String? @map("patient_identity")
   patientName     String? @map("patient_name")
 
@@ -308,8 +325,8 @@ model ConsultationSession {
   patientLatitude    Float?  @map("patient_latitude")
   patientLongitude   Float?  @map("patient_longitude")
 
-  nurseJoinedAt   DateTime? @map("nurse_joined_at")
-  nurseIdentity   String?   @map("nurse_identity")
+  nurseJoinedAt  DateTime? @map("nurse_joined_at")
+  nurseIdentity  String?   @map("nurse_identity")
 
   doctorJoinedAt  DateTime? @map("doctor_joined_at")
   patientJoinedAt DateTime? @map("patient_joined_at")
@@ -321,14 +338,14 @@ model ConsultationSession {
   recordingStartedAt   DateTime? @map("recording_started_at")
   recordingCompletedAt DateTime? @map("recording_completed_at")
 
-  compositionSid       String?   @unique @map("composition_sid")
+  compositionSid       String?   @map("composition_sid")
   compositionStatus    String?   @map("composition_status")
   compositionStartedAt DateTime? @map("composition_started_at")
   compositionReadyAt   DateTime? @map("composition_ready_at")
 
-  mediaUrl    String? @map("media_url")
-  mediaFormat String? @map("media_format")
-  durationSec Int?    @map("duration_sec")
+  mediaUrl     String? @map("media_url")
+  mediaFormat  String? @map("media_format")
+  durationSec  Int?    @map("duration_sec")
   errorMessage String? @map("error_message")
 
   consultationNote ConsultationNote?
@@ -337,6 +354,12 @@ model ConsultationSession {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
+  @@unique([roomName, tenantId])
+  @@unique([twilioRoomSid, tenantId])
+  @@unique([compositionSid, tenantId])
+  @@index([tenantId])
+  @@index([tenantId, doctorId, scheduledStartTime])
+  @@index([tenantId, patientId, scheduledStartTime])
   @@index([doctorId])
   @@index([patientId])
   @@index([nurseId])
@@ -352,14 +375,15 @@ model ConsultationSession {
 
 model ConsultationNote {
   id                    String              @id @default(uuid())
+  tenantId              String
   consultationSessionId String              @unique @map("consultation_session_id")
   consultationSession   ConsultationSession @relation(fields: [consultationSessionId], references: [sessionId], onDelete: Cascade)
 
   doctorId String
   doctor   User   @relation("ConsultationNoteDoctor", fields: [doctorId], references: [id], onDelete: Restrict)
 
-  patientId String  @map("patient_id")
-  patient   User    @relation("ConsultationNotePatient", fields: [patientId], references: [id], onDelete: Restrict)
+  patientId String @map("patient_id")
+  patient   User   @relation("ConsultationNotePatient", fields: [patientId], references: [id], onDelete: Restrict)
 
   nurseId String? @map("nurse_id")
   nurse   User?   @relation("ConsultationNoteNurse", fields: [nurseId], references: [id], onDelete: SetNull)
@@ -372,7 +396,7 @@ model ConsultationNote {
   assessment String?
   plan       String?
 
-  aiStatus String? // PENDING | PROCESSING | COMPLETED | FAILED
+  aiStatus String?
   aiError  String?
 
   isFinalized Boolean   @default(false) @map("is_finalized")
@@ -385,6 +409,7 @@ model ConsultationNote {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  @@index([tenantId])
   @@index([doctorId])
   @@index([patientId])
   @@index([nurseId])
@@ -395,11 +420,12 @@ model ConsultationNote {
 
 model ConsultationSessionAudit {
   id                    String              @id @default(uuid())
+  tenantId              String
   consultationSessionId String              @map("consultation_session_id")
   consultationSession   ConsultationSession @relation(fields: [consultationSessionId], references: [sessionId], onDelete: Cascade)
 
-  actorUserId String?  @map("actor_user_id")
-  actorUser   User?    @relation("ConsultationSessionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorUserId String?   @map("actor_user_id")
+  actorUser   User?     @relation("ConsultationSessionActor", fields: [actorUserId], references: [id], onDelete: SetNull)
   actorRole   UserRole? @map("actor_role")
   action      String
 
@@ -409,27 +435,71 @@ model ConsultationSessionAudit {
 
   createdAt DateTime @default(now()) @map("created_at")
 
+  @@index([tenantId])
   @@index([consultationSessionId])
   @@index([actorUserId])
   @@index([createdAt])
   @@map("ConsultationSessionAudit")
 }
 
-model AuthAuditLog {
-  id        String     @id @default(uuid())
-  userId    String?
-  user      User?      @relation(fields: [userId], references: [id], onDelete: SetNull)
-  email     String?
-  action    AuthAction
-  success   Boolean    @default(false)
-  ip        String?
-  userAgent String?
-  createdAt DateTime   @default(now())
+// ─── Public schema models (ephemeral / global) ────────────────────────────────
+// These stay in default search_path (public). No withTenantSchema needed.
 
-  @@index([userId])
-  @@index([action])
-  @@index([createdAt])
+model OauthState {
+  id          String        @id @default(uuid())
+  tenantSlug  String
+  provider    OAuthProvider
+  role        UserRole
+  redirectUrl String?
+  expiresAt   DateTime
+  createdAt   DateTime      @default(now())
+
+  @@index([expiresAt])
+  @@map("OAuthState")
 }
+
+model OauthPending {
+  id             String        @id @default(uuid())
+  tenantSlug     String
+  provider       OAuthProvider
+  role           UserRole
+  providerUserId String
+  email          String
+  name           String?
+  expiresAt      DateTime
+  createdAt      DateTime      @default(now())
+
+  @@unique([provider, providerUserId, tenantSlug])
+  @@index([email])
+  @@index([expiresAt])
+  @@map("OAuthPending")
+}
+
+model PendingRegistration {
+  id           String   @id @default(uuid())
+  tenantSlug   String
+  role         UserRole
+  email        String
+  phone        String
+  name         String
+  passwordHash String
+
+  license  String?
+  adminId  String?
+  nurseId  String?
+  bornDate DateTime?
+
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([tenantSlug])
+  @@index([email])
+  @@index([phone])
+  @@index([expiresAt])
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
 
 enum SessionType {
   SCHEDULED
