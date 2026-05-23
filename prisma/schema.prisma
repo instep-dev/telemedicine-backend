@@ -445,6 +445,48 @@ model ConsultationSessionAudit {
 // ─── Public schema models (ephemeral / global) ────────────────────────────────
 // These stay in default search_path (public). No withTenantSchema needed.
 
+model SuperAdmin {
+  id            String                   @id @default(uuid())
+  email         String                   @unique
+  name          String
+  passwordHash  String
+  createdAt     DateTime                 @default(now())
+  updatedAt     DateTime                 @updatedAt
+  refreshTokens SuperAdminRefreshToken[]
+}
+
+model SuperAdminRefreshToken {
+  id                String                  @id @default(uuid())
+  superAdminId      String
+  superAdmin        SuperAdmin              @relation(fields: [superAdminId], references: [id], onDelete: Cascade)
+  tokenHash         String                  @unique
+  userAgent         String?
+  ip                String?
+  revokedAt         DateTime?
+  replacedByTokenId String?                 @unique
+  replacedByToken   SuperAdminRefreshToken? @relation("SAReplacement", fields: [replacedByTokenId], references: [id])
+  replacesToken     SuperAdminRefreshToken? @relation("SAReplacement")
+  expiresAt         DateTime
+  createdAt         DateTime                @default(now())
+
+  @@index([superAdminId])
+  @@index([expiresAt])
+}
+
+model TenantRegistry {
+  id           String   @id
+  slug         String   @unique
+  name         String
+  schemaName   String   @unique @map("schema_name")
+  status       String   @default("active")
+  adminEmail   String?  @map("admin_email")
+  contactPhone String?  @map("contact_phone")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("tenant_registry")
+}
+
 model OauthState {
   id          String        @id @default(uuid())
   tenantSlug  String

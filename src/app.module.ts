@@ -18,6 +18,7 @@ import { diskStorage } from "multer";
 import { existsSync, mkdirSync } from "fs";
 import { TenantModule } from "./tenant/tenant.module";
 import { TenantMiddleware } from "./tenant/tenant.middleware";
+import { SuperAdminModule } from "./super-admin/super-admin.module";
 
 const uploadsDir = join(process.cwd(), "uploads", "profiles");
 
@@ -52,6 +53,7 @@ if (!existsSync(uploadsDir)) {
     }),
     PrismaModule,
     TenantModule,
+    SuperAdminModule,
     AuthModule,
     ProfileModule,
     ConsultationsModule,

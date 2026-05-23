@@ -19,4 +19,13 @@ export class TenantService {
     `;
     return rows;
   }
+
+  async isActiveSlug(slug: string): Promise<boolean> {
+    const rows = await this.prisma.$queryRaw<{ slug: string }[]>`
+      SELECT slug FROM public.tenant_registry
+      WHERE slug = ${slug} AND status = 'active'
+      LIMIT 1
+    `;
+    return rows.length > 0;
+  }
 }
