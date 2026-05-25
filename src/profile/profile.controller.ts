@@ -9,6 +9,7 @@ import {
   UploadedFile,
   BadRequestException,
 } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { join, extname } from "path";
@@ -115,6 +116,7 @@ export class ProfileController {
 
   // ─── EMAIL CHANGE flow ────────────────────────────────────────────────────────
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("doctor/change-email")
   requestEmailChangeDoctor(
     @CurrentUser() user: JwtPayload,
@@ -124,6 +126,7 @@ export class ProfileController {
     return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("admin/change-email")
   requestEmailChangeAdmin(
     @CurrentUser() user: JwtPayload,
@@ -133,6 +136,7 @@ export class ProfileController {
     return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("patient/change-email")
   requestEmailChangePatient(
     @CurrentUser() user: JwtPayload,
@@ -142,6 +146,7 @@ export class ProfileController {
     return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("nurse/change-email")
   requestEmailChangeNurse(
     @CurrentUser() user: JwtPayload,
@@ -189,26 +194,31 @@ export class ProfileController {
 
   // ─── PASSWORD RESET flow ──────────────────────────────────────────────────────
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("doctor/forgot-password")
   requestPasswordResetDoctor(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
     return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("admin/forgot-password")
   requestPasswordResetAdmin(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
     return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("patient/forgot-password")
   requestPasswordResetPatient(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
     return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("nurse/forgot-password")
   requestPasswordResetNurse(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
     return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("doctor/verify-reset-code")
   verifyResetCodeDoctor(
     @CurrentUser() user: JwtPayload,
@@ -218,6 +228,7 @@ export class ProfileController {
     return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("admin/verify-reset-code")
   verifyResetCodeAdmin(
     @CurrentUser() user: JwtPayload,
@@ -227,6 +238,7 @@ export class ProfileController {
     return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("patient/verify-reset-code")
   verifyResetCodePatient(
     @CurrentUser() user: JwtPayload,
@@ -236,6 +248,7 @@ export class ProfileController {
     return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("nurse/verify-reset-code")
   verifyResetCodeNurse(
     @CurrentUser() user: JwtPayload,

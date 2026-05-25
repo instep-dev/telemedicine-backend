@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
 import { RegisterDto } from "./dto/register.dto";
@@ -34,6 +35,7 @@ export class AuthController {
     };
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("login")
   async login(
     @Body() dto: LoginDto,
@@ -60,12 +62,14 @@ export class AuthController {
     return { accessToken: result.accessToken, user: result.user };
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("register")
   async register(@Body() dto: RegisterDto, @CurrentTenant() tenant: TenantContext) {
     if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
     return this.auth.register(dto, tenant);
   }
 
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @Post("registration/verify-email")
   async verifyEmail(
     @Body() dto: VerifyEmailDto,

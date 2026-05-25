@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from "@nestjs/common";
 import { PrismaService } from "prisma/prisma.service";
@@ -101,6 +102,7 @@ interface TenantRow {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
   constructor(private prisma: PrismaService, private jwt: JwtService) {}
 
   private accessTtl = process.env.JWT_ACCESS_TTL || "60m";
@@ -150,7 +152,7 @@ export class AuthService {
         });
       });
     } catch (err) {
-      console.error("[audit] failed to write audit log:", err);
+      this.logger.error("Failed to write audit log", err);
     }
   }
 
@@ -435,7 +437,7 @@ export class AuthService {
       process.env.RESEND_FROM_EMAIL || "Telemedicine <no-reply@notifications.instep.id>";
 
     if (!apiKey) {
-      console.warn(`RESEND_API_KEY kosong. Verification code untuk ${email}: ${code}`);
+      this.logger.warn(`RESEND_API_KEY not configured. Email to ${email} skipped.`);
       return;
     }
 
