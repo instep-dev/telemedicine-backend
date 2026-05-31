@@ -1,6 +1,5 @@
 import { IsIn, IsOptional, IsString } from 'class-validator';
 
-// test rebase conflict
 export class GetAiResultsQueryDto {
   @IsOptional()
   @IsString()
@@ -17,4 +16,8 @@ export class GetAiResultsQueryDto {
   @IsOptional()
   @IsIn(['newest', 'oldest'])
   sort?: 'newest' | 'oldest';
+
+  @IsOptional()
+  @IsIn(['success', 'failed', 'in-progress'])
+  statusBucket?: 'success' | 'failed' | 'in-progress';
 }

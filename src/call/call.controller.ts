@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
+import { CurrentTenant } from '../tenant/tenant.decorator';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { CallService } from './call.service';
 import { GetCallsQueryDto, GetCallStatsQueryDto } from './dto/call.dto';
 
@@ -18,28 +20,40 @@ export class CallController {
 
   @UseGuards(JwtGuard)
   @Get()
-  async findAll(@Req() req: any, @Query() query: GetCallsQueryDto) {
+  async findAll(
+    @Req() req: any,
+    @Query() query: GetCallsQueryDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang dapat melihat history call');
     }
-    return this.callService.findAllByDoctor(req.user.id, query);
+    return this.callService.findAllByDoctor(req.user.id, query, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Get('statistics')
-  async getStatistics(@Req() req: any, @Query() query: GetCallStatsQueryDto) {
+  async getStatistics(
+    @Req() req: any,
+    @Query() query: GetCallStatsQueryDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang dapat melihat statistik call');
     }
-    return this.callService.getDailyStatistics(req.user.id, query);
+    return this.callService.getDailyStatistics(req.user.id, query, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Get(':id')
-  async findById(@Req() req: any, @Param('id') id: string) {
+  async findById(
+    @Req() req: any,
+    @Param('id') id: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang dapat melihat detail call');
     }
-    return this.callService.findDetailById(req.user.id, id);
+    return this.callService.findDetailById(req.user.id, id, tenant);
   }
 }

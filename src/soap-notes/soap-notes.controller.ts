@@ -14,24 +14,29 @@ import {
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { UserRole } from '@prisma/client';
-import { Observable, Subject } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
+import { interval, merge, Observable, Subject } from 'rxjs';
+import { filter, map, takeUntil } from 'rxjs/operators';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
+import { CurrentTenant } from '../tenant/tenant.decorator';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { UpdateSoapNoteDto } from './dto/soap-notes.dto';
 import { SOAP_NOTE_UPDATED_EVENT, SoapNotesService } from './soap-notes.service';
 
 @Controller('soap-notes')
 @UseGuards(JwtGuard)
 export class SoapNotesController {
-  // Global subject — all SSE subscribers listen here
   private readonly sseSubject = new Subject<{ sessionId: string; note: any }>();
 
   constructor(private readonly soapNotesService: SoapNotesService) {}
 
   @Get(':sessionId')
-  async getNote(@Req() req: any, @Param('sessionId') sessionId: string) {
+  async getNote(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     this.requireDoctorOrPatient(req.user.role);
-    return this.soapNotesService.getNote(sessionId, req.user.id, req.user.role);
+    return this.soapNotesService.getNote(sessionId, req.user.id, req.user.role, tenant);
   }
 
   @Patch(':sessionId')
@@ -39,19 +44,24 @@ export class SoapNotesController {
     @Req() req: any,
     @Param('sessionId') sessionId: string,
     @Body() dto: UpdateSoapNoteDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang dapat mengubah SOAP note');
     }
-    return this.soapNotesService.updateNote(sessionId, req.user.id, dto);
+    return this.soapNotesService.updateNote(sessionId, req.user.id, dto, tenant);
   }
 
   @Post(':sessionId/finalize')
-  async finalizeNote(@Req() req: any, @Param('sessionId') sessionId: string) {
+  async finalizeNote(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang dapat memfinalisasi SOAP note');
     }
-    return this.soapNotesService.finalizeNote(sessionId, req.user.id);
+    return this.soapNotesService.finalizeNote(sessionId, req.user.id, tenant);
   }
 
   @Sse(':sessionId/stream')
@@ -59,14 +69,15 @@ export class SoapNotesController {
     @Req() req: any,
     @Param('sessionId') sessionId: string,
     @Res() res: any,
+    @CurrentTenant() tenant: TenantContext,
   ): Promise<Observable<MessageEvent>> {
     this.requireDoctorOrPatient(req.user.role);
 
-    // Verify the caller is actually assigned to this session
     await this.soapNotesService.verifyStreamAccess(
       sessionId,
       req.user.id,
       req.user.role,
+      tenant,
     );
 
     res.setHeader('Cache-Control', 'no-cache');
@@ -74,9 +85,13 @@ export class SoapNotesController {
 
     const role = req.user.role as UserRole;
 
-    return this.sseSubject.pipe(
+    // Cleanup saat client disconnect — mencegah memory leak di koneksi ribuan user
+    const disconnect$ = new Subject<void>();
+    req.on('close', () => disconnect$.next());
+
+    const events$ = this.sseSubject.pipe(
+      takeUntil(disconnect$),
       filter((event) => event.sessionId === sessionId),
-      // Patients and nurses only receive events after finalization — prevents SOAP data leak
       filter(
         (event) =>
           role === UserRole.DOCTOR ||
@@ -86,9 +101,16 @@ export class SoapNotesController {
         data: { type: 'NOTE_UPDATED', note: event.note },
       }) as MessageEvent),
     );
+
+    // Heartbeat 25 detik — mencegah koneksi idle ditutup proxy
+    const heartbeat$ = interval(25_000).pipe(
+      takeUntil(disconnect$),
+      map(() => ({ data: { type: 'heartbeat' } }) as MessageEvent),
+    );
+
+    return merge(events$, heartbeat$);
   }
 
-  // Listen to service events and push to SSE stream
   @OnEvent(SOAP_NOTE_UPDATED_EVENT)
   handleSoapNoteUpdated(payload: { sessionId: string; note: any }) {
     this.sseSubject.next(payload);

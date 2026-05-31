@@ -9,6 +9,7 @@ import {
   UploadedFile,
   BadRequestException,
 } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { FileInterceptor } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { join, extname } from "path";
@@ -16,6 +17,8 @@ import { existsSync, mkdirSync } from "fs";
 import { JwtGuard } from "../auth/guards/jwt.guard";
 import type { JwtPayload } from "../auth/types/jwt-payload";
 import { CurrentUser } from "../auth/decorators/current-user.decorator";
+import { CurrentTenant } from "../tenant/tenant.decorator";
+import type { TenantContext } from "../tenant/tenant.interface";
 import { AuthService } from "../auth/auth.service";
 import {
   UpdateDoctorProfileDto,
@@ -26,17 +29,17 @@ import {
 import {
   ChangeEmailRequestDto,
   ConfirmEmailChangeDto,
-  ForgotPasswordRequestDto,
   SetNewPasswordDto,
 } from "../auth/dto/profile-management.dto";
 
-const uploadsDir = join(process.cwd(), "uploads", "profiles");
-if (!existsSync(uploadsDir)) {
-  mkdirSync(uploadsDir, { recursive: true });
-}
-
+// Per-tenant storage: uploads/profiles/{tenantSlug}/{filename}
 const pictureStorage = diskStorage({
-  destination: (_req, _file, cb) => cb(null, uploadsDir),
+  destination: (req, _file, cb) => {
+    const slug = (req as any).tenant?.slug || "unknown";
+    const dir = join(process.cwd(), "uploads", "profiles", slug);
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
   filename: (_req, file, cb) => {
     const ext = extname(file.originalname) || "." + file.mimetype.split("/")[1];
     cb(null, `${Date.now()}-${Math.random().toString(36).substring(7)}${ext}`);
@@ -51,267 +54,301 @@ const MAX_FILE_SIZE = 2 * 1024 * 1024; // 2MB
 export class ProfileController {
   constructor(private auth: AuthService) {}
 
-  // ==================== GET PROFILE ====================
+  // ─── GET profile ─────────────────────────────────────────────────────────────
+
   @Get("doctor")
-  async getDoctorProfile(@CurrentUser() user: JwtPayload) {
-    return this.auth.getDoctorProfile(user.sub);
+  getDoctorProfile(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.getDoctorProfile(user.sub, tenant);
   }
 
   @Get("admin")
-  async getAdminProfile(@CurrentUser() user: JwtPayload) {
-    return this.auth.getAdminProfile(user.sub);
+  getAdminProfile(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.getAdminProfile(user.sub, tenant);
   }
 
   @Get("patient")
-  async getPatientProfile(@CurrentUser() user: JwtPayload) {
-    return this.auth.getPatientProfile(user.sub);
+  getPatientProfile(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.getPatientProfile(user.sub, tenant);
   }
 
   @Get("nurse")
-  async getNurseProfile(@CurrentUser() user: JwtPayload) {
-    return this.auth.getNurseProfile(user.sub);
+  getNurseProfile(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.getNurseProfile(user.sub, tenant);
   }
 
-  // ==================== UPDATE PROFILE ====================
+  // ─── UPDATE profile ───────────────────────────────────────────────────────────
+
   @Put("doctor")
-  async updateDoctorProfile(
+  updateDoctorProfile(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateDoctorProfileDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.updateDoctorProfile(user.sub, dto);
+    return this.auth.updateDoctorProfile(user.sub, dto, tenant);
   }
 
   @Put("admin")
-  async updateAdminProfile(
+  updateAdminProfile(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateAdminProfileDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.updateAdminProfile(user.sub, dto);
+    return this.auth.updateAdminProfile(user.sub, dto, tenant);
   }
 
   @Put("patient")
-  async updatePatientProfile(
+  updatePatientProfile(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdatePatientProfileDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.updatePatientProfile(user.sub, dto);
+    return this.auth.updatePatientProfile(user.sub, dto, tenant);
   }
 
   @Put("nurse")
-  async updateNurseProfile(
+  updateNurseProfile(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateNurseProfileDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.updateNurseProfile(user.sub, dto);
+    return this.auth.updateNurseProfile(user.sub, dto, tenant);
   }
 
-  // ==================== EMAIL CHANGE FLOW ====================
+  // ─── EMAIL CHANGE flow ────────────────────────────────────────────────────────
+
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("doctor/change-email")
-  async requestEmailChangeDoctor(
+  requestEmailChangeDoctor(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangeEmailRequestDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.requestEmailChange(user.sub, dto);
+    return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("admin/change-email")
-  async requestEmailChangeAdmin(
+  requestEmailChangeAdmin(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangeEmailRequestDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.requestEmailChange(user.sub, dto);
+    return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("patient/change-email")
-  async requestEmailChangePatient(
+  requestEmailChangePatient(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangeEmailRequestDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.requestEmailChange(user.sub, dto);
+    return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("nurse/change-email")
-  async requestEmailChangeNurse(
+  requestEmailChangeNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ChangeEmailRequestDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.requestEmailChange(user.sub, dto);
+    return this.auth.requestEmailChange(user.sub, dto, tenant);
   }
 
   @Post("doctor/confirm-email-change")
-  async confirmEmailChangeDoctor(
+  confirmEmailChangeDoctor(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConfirmEmailChangeDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.confirmEmailChange(user.sub, dto);
+    return this.auth.confirmEmailChange(user.sub, dto, tenant);
   }
 
   @Post("admin/confirm-email-change")
-  async confirmEmailChangeAdmin(
+  confirmEmailChangeAdmin(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConfirmEmailChangeDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.confirmEmailChange(user.sub, dto);
+    return this.auth.confirmEmailChange(user.sub, dto, tenant);
   }
 
   @Post("patient/confirm-email-change")
-  async confirmEmailChangePatient(
+  confirmEmailChangePatient(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConfirmEmailChangeDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.confirmEmailChange(user.sub, dto);
+    return this.auth.confirmEmailChange(user.sub, dto, tenant);
   }
 
   @Post("nurse/confirm-email-change")
-  async confirmEmailChangeNurse(
+  confirmEmailChangeNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ConfirmEmailChangeDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.confirmEmailChange(user.sub, dto);
+    return this.auth.confirmEmailChange(user.sub, dto, tenant);
   }
 
-  // ==================== PASSWORD RESET FLOW ====================
+  // ─── PASSWORD RESET flow ──────────────────────────────────────────────────────
+
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("doctor/forgot-password")
-  async requestPasswordResetDoctor(@CurrentUser() user: JwtPayload) {
-    return this.auth.requestPasswordReset(user.sub);
+  requestPasswordResetDoctor(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("admin/forgot-password")
-  async requestPasswordResetAdmin(@CurrentUser() user: JwtPayload) {
-    return this.auth.requestPasswordReset(user.sub);
+  requestPasswordResetAdmin(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("patient/forgot-password")
-  async requestPasswordResetPatient(@CurrentUser() user: JwtPayload) {
-    return this.auth.requestPasswordReset(user.sub);
+  requestPasswordResetPatient(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
   @Post("nurse/forgot-password")
-  async requestPasswordResetNurse(@CurrentUser() user: JwtPayload) {
-    return this.auth.requestPasswordReset(user.sub);
+  requestPasswordResetNurse(@CurrentUser() user: JwtPayload, @CurrentTenant() tenant: TenantContext) {
+    return this.auth.requestPasswordReset(user.sub, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("doctor/verify-reset-code")
-  async verifyResetCodeDoctor(
+  verifyResetCodeDoctor(
     @CurrentUser() user: JwtPayload,
     @Body() dto: { code: string },
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.verifyResetCode(user.sub, dto.code);
+    return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("admin/verify-reset-code")
-  async verifyResetCodeAdmin(
+  verifyResetCodeAdmin(
     @CurrentUser() user: JwtPayload,
     @Body() dto: { code: string },
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.verifyResetCode(user.sub, dto.code);
+    return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("patient/verify-reset-code")
-  async verifyResetCodePatient(
+  verifyResetCodePatient(
     @CurrentUser() user: JwtPayload,
     @Body() dto: { code: string },
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.verifyResetCode(user.sub, dto.code);
+    return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("nurse/verify-reset-code")
-  async verifyResetCodeNurse(
+  verifyResetCodeNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: { code: string },
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.verifyResetCode(user.sub, dto.code);
+    return this.auth.verifyResetCode(user.sub, dto.code, tenant);
   }
 
   @Post("doctor/set-new-password")
-  async setNewPasswordDoctor(
+  setNewPasswordDoctor(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetNewPasswordDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.setNewPassword(user.sub, dto);
+    return this.auth.setNewPassword(user.sub, dto, tenant);
   }
 
   @Post("admin/set-new-password")
-  async setNewPasswordAdmin(
+  setNewPasswordAdmin(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetNewPasswordDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.setNewPassword(user.sub, dto);
+    return this.auth.setNewPassword(user.sub, dto, tenant);
   }
 
   @Post("patient/set-new-password")
-  async setNewPasswordPatient(
+  setNewPasswordPatient(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetNewPasswordDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.setNewPassword(user.sub, dto);
+    return this.auth.setNewPassword(user.sub, dto, tenant);
   }
 
   @Post("nurse/set-new-password")
-  async setNewPasswordNurse(
+  setNewPasswordNurse(
     @CurrentUser() user: JwtPayload,
     @Body() dto: SetNewPasswordDto,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.auth.setNewPassword(user.sub, dto);
+    return this.auth.setNewPassword(user.sub, dto, tenant);
   }
 
-  // ==================== PROFILE PICTURE UPLOAD ====================
+  // ─── PROFILE PICTURE upload ───────────────────────────────────────────────────
+
   @Post("doctor/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
-  async uploadPictureDoctor(
+  uploadPictureDoctor(
     @CurrentUser() user: JwtPayload,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.uploadProfilePicture(user.sub, file);
+    return this.handleUpload(user.sub, file, tenant);
   }
 
   @Post("admin/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
-  async uploadPictureAdmin(
+  uploadPictureAdmin(
     @CurrentUser() user: JwtPayload,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.uploadProfilePicture(user.sub, file);
+    return this.handleUpload(user.sub, file, tenant);
   }
 
   @Post("patient/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
-  async uploadPicturePatient(
+  uploadPicturePatient(
     @CurrentUser() user: JwtPayload,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.uploadProfilePicture(user.sub, file);
+    return this.handleUpload(user.sub, file, tenant);
   }
 
   @Post("nurse/upload-picture")
   @UseInterceptors(FileInterceptor("file", { storage: pictureStorage }))
-  async uploadPictureNurse(
+  uploadPictureNurse(
     @CurrentUser() user: JwtPayload,
-    @UploadedFile() file: any,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    return this.uploadProfilePicture(user.sub, file);
+    return this.handleUpload(user.sub, file, tenant);
   }
 
-  private async uploadProfilePicture(
-    userId: string,
-    file: any,
-  ) {
-    if (!file) {
-      throw new BadRequestException("File harus disertakan");
-    }
+  private handleUpload(userId: string, file: Express.Multer.File, tenant: TenantContext) {
+    if (!file) throw new BadRequestException("File harus disertakan");
 
     if (!ALLOWED_MIME_TYPES.includes(file.mimetype)) {
-      throw new BadRequestException(
-        "Format file hanya boleh JPG, JPEG, PNG, SVG, atau AVIF",
-      );
+      throw new BadRequestException("Format file hanya boleh JPG, JPEG, PNG, SVG, atau AVIF");
     }
 
     if (file.size > MAX_FILE_SIZE) {
       throw new BadRequestException("Ukuran file maksimal 2MB");
     }
 
-    // Store relative path so ServeStaticModule can serve it at /uploads/profiles/<filename>
-    const relativePath = `uploads/profiles/${file.filename}`;
-    return this.auth.uploadProfilePicture(userId, relativePath);
+    // Path: uploads/profiles/{tenantSlug}/{filename} — served by ServeStaticModule
+    const relativePath = `uploads/profiles/${tenant.slug}/${file.filename}`;
+    return this.auth.uploadProfilePicture(userId, relativePath, tenant);
   }
 }

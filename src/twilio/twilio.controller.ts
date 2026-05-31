@@ -10,6 +10,8 @@ import {
 } from '@nestjs/common';
 import { UserRole } from '@prisma/client';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
+import { CurrentTenant } from '../tenant/tenant.decorator';
+import type { TenantContext } from '../tenant/tenant.interface';
 import {
   DoctorVideoTokenDto,
   PatientVideoTokenDto,
@@ -38,58 +40,81 @@ export class TwilioController {
 
   @UseGuards(JwtGuard)
   @Post('video/doctor-token')
-  async doctorToken(@Req() req: any, @Body() dto: DoctorVideoTokenDto) {
+  async doctorToken(
+    @Req() req: any,
+    @Body() dto: DoctorVideoTokenDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang boleh join sebagai dokter');
     }
-    return this.twilio.doctorToken(req.user.id, dto.sessionId);
+    return this.twilio.doctorToken(req.user.id, dto.sessionId, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Post('video/patient-token')
-  async patientToken(@Req() req: any, @Body() dto: PatientVideoTokenDto) {
+  async patientToken(
+    @Req() req: any,
+    @Body() dto: PatientVideoTokenDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.PATIENT) {
       throw new ForbiddenException('Hanya patient yang boleh join sebagai patient');
     }
 
     const reqIp = getClientIp(req);
-    return this.twilio.patientToken(req.user.id, dto.sessionId, reqIp ?? dto.clientIp);
+    return this.twilio.patientToken(req.user.id, dto.sessionId, tenant, reqIp ?? dto.clientIp);
   }
 
   @UseGuards(JwtGuard)
   @Post('video/end/:sessionId')
-  async endCall(@Req() req: any, @Param('sessionId') sessionId: string) {
+  async endCall(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang boleh mengakhiri call');
     }
-    return this.twilio.completeConsultationRoom(sessionId, req.user.id);
+    return this.twilio.completeConsultationRoom(sessionId, req.user.id, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Get('video/result/:sessionId')
-  async getCallResult(@Req() req: any, @Param('sessionId') sessionId: string) {
+  async getCallResult(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang bisa melihat result call');
     }
-    return this.twilio.getCallSessionResult(req.user.id, sessionId);
+    return this.twilio.getCallSessionResult(req.user.id, sessionId, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Post('video/nurse-token')
-  async nurseToken(@Req() req: any, @Body() dto: DoctorVideoTokenDto) {
+  async nurseToken(
+    @Req() req: any,
+    @Body() dto: DoctorVideoTokenDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.NURSE) {
       throw new ForbiddenException('Hanya nurse yang boleh join sebagai nurse');
     }
-    return this.twilio.nurseToken(req.user.id, dto.sessionId);
+    return this.twilio.nurseToken(req.user.id, dto.sessionId, tenant);
   }
 
   @UseGuards(JwtGuard)
   @Post('video/transcription')
-  async saveTranscription(@Req() req: any, @Body() dto: VideoTranscriptionDto) {
+  async saveTranscription(
+    @Req() req: any,
+    @Body() dto: VideoTranscriptionDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
     if (req.user.role !== UserRole.DOCTOR) {
       throw new ForbiddenException('Hanya dokter yang boleh kirim transcription');
     }
-    return this.twilio.saveTranscription(req.user.id, dto);
+    return this.twilio.saveTranscription(req.user.id, dto, tenant);
   }
 }
-

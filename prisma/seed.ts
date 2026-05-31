@@ -1,12 +1,19 @@
+import "dotenv/config";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 
-const adapter = new PrismaPg({
-  connectionString: process.env.DATABASE_URL!,
-});
+const TENANT_ID = "880b1733-15ce-74a7-da49-779988773333";
+const TENANT_SLUG = "demo-app";
+
+// Second arg { schema } is the official PrismaPg API to target a specific PostgreSQL schema
+const adapter = new PrismaPg(
+  { connectionString: process.env.DATABASE_URL! },
+  { schema: "tenant_demo_app" },
+);
 
 const prisma = new PrismaClient({ adapter });
 
+// ─── Seed data ────────────────────────────────────────────────────────────────
 const LICENSES = [
   "12345/SIP-1/2026",
   "23456/SIP-2/2026",
@@ -59,55 +66,65 @@ const NURSE_IDS = [
   "2026040110",
 ];
 
+// ─── Main ─────────────────────────────────────────────────────────────────────
 async function main() {
-  console.log("? Start seeding...");
+  console.log(`Seeding tenant: ${TENANT_SLUG} (tenant_demo_app)`);
 
-  await prisma.oauthAccount.deleteMany();
-  await prisma.oauthPending.deleteMany();
-  await prisma.oauthState.deleteMany();
-  await prisma.pendingRegistration.deleteMany();
-  await prisma.refreshToken.deleteMany();
-  await prisma.consultationSessionAudit.deleteMany();
-  await prisma.consultationNote.deleteMany();
-  await prisma.consultationSession.deleteMany();
-  await prisma.doctorProfile.deleteMany();
-  await prisma.adminProfile.deleteMany();
-  await prisma.patientProfile.deleteMany();
-  await prisma.user.deleteMany();
-  await prisma.authAuditLog.deleteMany();
+  // Public schema tables — raw SQL with explicit schema since adapter is scoped to tenant schema
+  await prisma.$executeRaw`DELETE FROM "public"."OAuthPending" WHERE "tenantSlug" = ${TENANT_SLUG}`;
+  await prisma.$executeRaw`DELETE FROM "public"."OAuthState" WHERE "tenantSlug" = ${TENANT_SLUG}`;
+  await prisma.$executeRaw`DELETE FROM "public"."PendingRegistration" WHERE "tenantSlug" = ${TENANT_SLUG}`;
 
-  await prisma.nurseProfile.deleteMany();
-  await prisma.licenseWhitelist.deleteMany();
-  await prisma.adminIdWhitelist.deleteMany();
-  await prisma.mrnWhitelist.deleteMany();
-  await prisma.nurseIdWhitelist.deleteMany();
+  // Tenant schema tables — Prisma model API works because adapter is scoped to tenant_demo_app
+  await prisma.$transaction(async (tx) => {
+    await tx.consultationSessionAudit.deleteMany();
+    await tx.consultationNote.deleteMany();
+    await tx.consultationSession.deleteMany();
+    await tx.authAuditLog.deleteMany();
+    await tx.oauthAccount.deleteMany();
+    await tx.pendingEmailChange.deleteMany();
+    await tx.pendingPasswordReset.deleteMany();
+    await tx.refreshToken.deleteMany();
+    await tx.doctorProfile.deleteMany();
+    await tx.adminProfile.deleteMany();
+    await tx.patientProfile.deleteMany();
+    await tx.nurseProfile.deleteMany();
+    await tx.user.deleteMany();
+    await tx.licenseWhitelist.deleteMany();
+    await tx.adminIdWhitelist.deleteMany();
+    await tx.mrnWhitelist.deleteMany();
+    await tx.nurseIdWhitelist.deleteMany();
+  });
 
-  for (const license of LICENSES) {
-    await prisma.licenseWhitelist.create({ data: { license } });
-  }
+  // Insert whitelists
+  await prisma.$transaction(async (tx) => {
+    await tx.licenseWhitelist.createMany({
+      data: LICENSES.map((license) => ({ tenantId: TENANT_ID, license })),
+    });
 
-  for (const adminId of ADMIN_IDS) {
-    await prisma.adminIdWhitelist.create({ data: { adminId } });
-  }
+    await tx.adminIdWhitelist.createMany({
+      data: ADMIN_IDS.map((adminId) => ({ tenantId: TENANT_ID, adminId })),
+    });
 
-  for (const mrn of MRNS) {
-    await prisma.mrnWhitelist.create({ data: { mrn } });
-  }
+    await tx.mrnWhitelist.createMany({
+      data: MRNS.map((mrn) => ({ tenantId: TENANT_ID, mrn })),
+    });
 
-  for (const nurseId of NURSE_IDS) {
-    await prisma.nurseIdWhitelist.create({ data: { nurseId } });
-  }
+    await tx.nurseIdWhitelist.createMany({
+      data: NURSE_IDS.map((nurseId) => ({ tenantId: TENANT_ID, nurseId })),
+    });
+  });
 
-  console.log("? Seed selesai");
-  console.log("? License whitelist: 10 item");
-  console.log("? Admin ID whitelist: 10 item");
-  console.log("? MRN whitelist: 10 item");
-  console.log("? Nurse ID whitelist: 10 item");
+  console.log("Seed selesai");
+  console.log(`License whitelist : ${LICENSES.length} item`);
+  console.log(`Admin ID whitelist: ${ADMIN_IDS.length} item`);
+  console.log(`MRN whitelist     : ${MRNS.length} item`);
+  console.log(`Nurse ID whitelist: ${NURSE_IDS.length} item`);
 }
 
 main()
   .catch((e) => {
-    console.error("? Seed error:", e);
+    console.error("Seed error:", e);
     process.exit(1);
   })
   .finally(async () => {

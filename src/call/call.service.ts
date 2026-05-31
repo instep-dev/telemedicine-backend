@@ -4,6 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { GetCallsQueryDto, GetCallStatsQueryDto } from './dto/call.dto';
 
 @Injectable()
@@ -43,11 +44,7 @@ export class CallService {
       const month = Number(dateOnlyMatch[2]) - 1;
       const day = Number(dateOnlyMatch[3]);
 
-      if (
-        !Number.isFinite(year) ||
-        !Number.isFinite(month) ||
-        !Number.isFinite(day)
-      ) {
+      if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
         throw new BadRequestException(`${field} tidak valid`);
       }
 
@@ -91,11 +88,7 @@ export class CallService {
     return shifted.toISOString().slice(0, 10);
   }
 
-  private buildDateKeys(
-    startDate: Date,
-    endDate: Date,
-    tzOffsetMinutes: number,
-  ): string[] {
+  private buildDateKeys(startDate: Date, endDate: Date, tzOffsetMinutes: number): string[] {
     const startKey = this.toDateKey(startDate, tzOffsetMinutes);
     const endKey = this.toDateKey(endDate, tzOffsetMinutes);
 
@@ -141,7 +134,7 @@ export class CallService {
     return null;
   }
 
-  async findAllByDoctor(doctorId: string, query: GetCallsQueryDto) {
+  async findAllByDoctor(doctorId: string, query: GetCallsQueryDto, tenant: TenantContext) {
     const limit = this.normalizeLimit(query.limit);
     const cursor = query.cursor?.trim() || undefined;
     const search = query.search?.trim() || undefined;
@@ -155,13 +148,7 @@ export class CallService {
 
     const whereClause: any = {
       doctorId,
-      ...(statusFilter?.length
-        ? {
-            sessionStatus: {
-              in: statusFilter,
-            },
-          }
-        : {}),
+      ...(statusFilter?.length ? { sessionStatus: { in: statusFilter } } : {}),
       ...(search
         ? {
             OR: [
@@ -171,55 +158,35 @@ export class CallService {
               { doctorIdentity: { contains: search, mode: 'insensitive' } },
               { patientIdentity: { contains: search, mode: 'insensitive' } },
               { patientName: { contains: search, mode: 'insensitive' } },
-              {
-                doctor: { name: { contains: search, mode: 'insensitive' } },
-              },
-              {
-                patient: { name: { contains: search, mode: 'insensitive' } },
-              },
+              { doctor: { name: { contains: search, mode: 'insensitive' } } },
+              { patient: { name: { contains: search, mode: 'insensitive' } } },
             ],
           }
         : {}),
     };
 
     if (cursor) {
-      const cursorRow = await this.prisma.consultationSession.findFirst({
-        where: {
-          sessionId: cursor,
-          doctorId,
-        },
-        select: { sessionId: true },
+      const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationSession.findFirst({
+          where: { sessionId: cursor, doctorId },
+          select: { sessionId: true },
+        });
       });
 
-      if (!cursorRow) {
-        throw new NotFoundException('Cursor tidak ditemukan untuk doctor ini');
-      }
+      if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk doctor ini');
     }
 
-    const rows = await this.prisma.consultationSession.findMany({
-      where: whereClause,
-      take: limit + 1,
-      ...(cursor
-        ? {
-            cursor: { sessionId: cursor },
-            skip: 1,
-          }
-        : {}),
-      orderBy,
-      include: {
-        doctor: {
-          select: {
-            id: true,
-            name: true,
-          },
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findMany({
+        where: whereClause,
+        take: limit + 1,
+        ...(cursor ? { cursor: { sessionId: cursor }, skip: 1 } : {}),
+        orderBy,
+        include: {
+          doctor: { select: { id: true, name: true } },
+          patient: { select: { id: true, name: true } },
         },
-        patient: {
-          select: {
-            id: true,
-            name: true,
-          },
-        },
-      },
+      });
     });
 
     const hasMore = rows.length > limit;
@@ -264,17 +231,11 @@ export class CallService {
         createdAt: item.createdAt,
         updatedAt: item.updatedAt,
       })),
-      pagination: {
-        limit,
-        nextCursor,
-        hasMore,
-        sort,
-        search: search ?? null,
-      },
+      pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
     };
   }
 
-  async getDailyStatistics(doctorId: string, query: GetCallStatsQueryDto) {
+  async getDailyStatistics(doctorId: string, query: GetCallStatsQueryDto, tenant: TenantContext) {
     const tzOffset = this.normalizeTzOffset(query.tzOffset);
 
     const endDate =
@@ -287,57 +248,29 @@ export class CallService {
         endDate.getFullYear(),
         endDate.getMonth(),
         endDate.getDate() - 6,
-        0,
-        0,
-        0,
-        0,
+        0, 0, 0, 0,
       );
 
     if (startDate > endDate) {
-      throw new BadRequestException(
-        'startDate tidak boleh lebih besar dari endDate',
-      );
+      throw new BadRequestException('startDate tidak boleh lebih besar dari endDate');
     }
 
     const dateKeys = this.buildDateKeys(startDate, endDate, tzOffset);
-    const buckets = new Map(
-      dateKeys.map((key) => [key, { count: 0, seconds: 0 }]),
-    );
+    const buckets = new Map(dateKeys.map((key) => [key, { count: 0, seconds: 0 }]));
 
-    const rows = await this.prisma.consultationSession.findMany({
-      where: {
-        doctorId,
-        sessionStatus: { not: 'FAILED' },
-        OR: [
-          {
-            endedAt: {
-              gte: startDate,
-              lte: endDate,
-            },
-          },
-          {
-            endedAt: null,
-            startedAt: {
-              gte: startDate,
-              lte: endDate,
-            },
-          },
-          {
-            endedAt: null,
-            startedAt: null,
-            createdAt: {
-              gte: startDate,
-              lte: endDate,
-            },
-          },
-        ],
-      },
-      select: {
-        endedAt: true,
-        startedAt: true,
-        createdAt: true,
-        durationSec: true,
-      },
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findMany({
+        where: {
+          doctorId,
+          sessionStatus: { not: 'FAILED' },
+          OR: [
+            { endedAt: { gte: startDate, lte: endDate } },
+            { endedAt: null, startedAt: { gte: startDate, lte: endDate } },
+            { endedAt: null, startedAt: null, createdAt: { gte: startDate, lte: endDate } },
+          ],
+        },
+        select: { endedAt: true, startedAt: true, createdAt: true, durationSec: true },
+      });
     });
 
     for (const row of rows) {
@@ -361,53 +294,44 @@ export class CallService {
 
     return {
       startDate: dateKeys[0] ?? this.toDateKey(startDate, tzOffset),
-      endDate:
-        dateKeys[dateKeys.length - 1] ?? this.toDateKey(endDate, tzOffset),
+      endDate: dateKeys[dateKeys.length - 1] ?? this.toDateKey(endDate, tzOffset),
       categories: dateKeys,
       dailyCounts,
       dailyHours,
     };
   }
 
-  async findDetailById(doctorId: string, id: string) {
-    const note = await this.prisma.consultationNote.findFirst({
-      where: {
-        id,
-        doctorId,
-      },
-      include: {
-        consultationSession: {
-          select: {
-            sessionId: true,
-            sessionStatus: true,
-            roomName: true,
-            startedAt: true,
-            endedAt: true,
-            twilioRoomSid: true,
-            doctorIdentity: true,
-            patientIdentity: true,
-            recordingStatus: true,
-            compositionStatus: true,
-            mediaUrl: true,
-            mediaFormat: true,
-            durationSec: true,
-            errorMessage: true,
-            createdAt: true,
-            updatedAt: true,
-            doctor: {
-              select: {
-                id: true,
-                name: true,
-              },
+  async findDetailById(doctorId: string, id: string, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findFirst({
+        where: { id, doctorId },
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              roomName: true,
+              startedAt: true,
+              endedAt: true,
+              twilioRoomSid: true,
+              doctorIdentity: true,
+              patientIdentity: true,
+              recordingStatus: true,
+              compositionStatus: true,
+              mediaUrl: true,
+              mediaFormat: true,
+              durationSec: true,
+              errorMessage: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
             },
           },
         },
-      },
+      });
     });
 
-    if (!note) {
-      throw new NotFoundException('Call detail tidak ditemukan');
-    }
+    if (!note) throw new NotFoundException('Call detail tidak ditemukan');
 
     return {
       id: note.id,
@@ -452,4 +376,3 @@ export class CallService {
     };
   }
 }
-

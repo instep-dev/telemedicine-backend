@@ -2,11 +2,15 @@ import { ConsultationMode, SessionStatus, SessionType } from '@prisma/client';
 import {
   IsEnum,
   IsIn,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
   Matches,
+  Max,
+  Min,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class CreateConsultationSessionDto {
   @IsUUID()
@@ -44,6 +48,23 @@ export class CreateConsultationSessionDto {
   scheduledEndTime?: string;
 }
 
+export class RescheduleConsultationSessionDto {
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'scheduledDate harus format YYYY-MM-DD',
+  })
+  scheduledDate: string;
+
+  @Matches(/^\d{2}:\d{2}$/, {
+    message: 'scheduledStartTime harus format HH:mm',
+  })
+  scheduledStartTime: string;
+
+  @Matches(/^\d{2}:\d{2}$/, {
+    message: 'scheduledEndTime harus format HH:mm',
+  })
+  scheduledEndTime: string;
+}
+
 export class ListConsultationSessionsQueryDto {
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, {
@@ -62,5 +83,16 @@ export class ListConsultationSessionsQueryDto {
   @IsOptional()
   @IsString()
   search?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  limit?: number;
+
+  @IsOptional()
+  @IsString()
+  cursor?: string;
 }
 
