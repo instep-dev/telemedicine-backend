@@ -6,6 +6,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { UserRole } from '@prisma/client';
 import { PrismaService } from 'prisma/prisma.service';
+import type { TenantContext } from '../tenant/tenant.interface';
 import { UpdateSoapNoteDto } from './dto/soap-notes.dto';
 
 export const SOAP_NOTE_UPDATED_EVENT = 'soap.note.updated';
@@ -50,26 +51,20 @@ export class SoapNotesService {
     private readonly events: EventEmitter2,
   ) {}
 
-  async getNote(sessionId: string, userId: string, role: UserRole) {
-    const note = await this.prisma.consultationNote.findUnique({
-      where: { consultationSessionId: sessionId },
-      include: NOTE_INCLUDE,
+  async getNote(sessionId: string, userId: string, role: UserRole, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findUnique({
+        where: { consultationSessionId: sessionId },
+        include: NOTE_INCLUDE,
+      });
     });
 
     if (!note) throw new NotFoundException('SOAP note tidak ditemukan');
 
     this.assertAccess(note, userId, role);
 
-    if (role === UserRole.PATIENT && !note.isFinalized) {
-      throw new ForbiddenException(
-        'Dokter belum memfinalisasi hasil konsultasi ini',
-      );
-    }
-
-    if (role === UserRole.NURSE && !note.isFinalized) {
-      throw new ForbiddenException(
-        'Dokter belum memfinalisasi hasil konsultasi ini',
-      );
+    if ((role === UserRole.PATIENT || role === UserRole.NURSE) && !note.isFinalized) {
+      throw new ForbiddenException('Dokter belum memfinalisasi hasil konsultasi ini');
     }
 
     return this.mapNote(note);
@@ -79,67 +74,60 @@ export class SoapNotesService {
     sessionId: string,
     doctorId: string,
     dto: UpdateSoapNoteDto,
+    tenant: TenantContext,
   ) {
-    const note = await this.findAndAssertDoctor(sessionId, doctorId);
+    const note = await this.findAndAssertDoctor(sessionId, doctorId, tenant);
 
-    const updated = await this.prisma.consultationNote.update({
-      where: { id: note.id },
-      data: {
-        subjective: dto.subjective ?? note.subjective,
-        objective: dto.objective ?? note.objective,
-        assessment: dto.assessment ?? note.assessment,
-        plan: dto.plan ?? note.plan,
-      },
-      include: NOTE_INCLUDE,
+    const updated = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.update({
+        where: { id: note.id },
+        data: {
+          subjective: dto.subjective ?? note.subjective,
+          objective: dto.objective ?? note.objective,
+          assessment: dto.assessment ?? note.assessment,
+          plan: dto.plan ?? note.plan,
+        },
+        include: NOTE_INCLUDE,
+      });
     });
 
     const mapped = this.mapNote(updated);
-    this.events.emit(SOAP_NOTE_UPDATED_EVENT, {
-      sessionId,
-      note: mapped,
-    });
+    this.events.emit(SOAP_NOTE_UPDATED_EVENT, { sessionId, note: mapped });
 
     return mapped;
   }
 
-  async finalizeNote(sessionId: string, doctorId: string) {
-    const note = await this.findAndAssertDoctor(sessionId, doctorId);
+  async finalizeNote(sessionId: string, doctorId: string, tenant: TenantContext) {
+    const note = await this.findAndAssertDoctor(sessionId, doctorId, tenant);
 
     if (note.isFinalized) {
       throw new ForbiddenException('SOAP note sudah difinalisasi');
     }
 
-    const updated = await this.prisma.consultationNote.update({
-      where: { id: note.id },
-      data: {
-        isFinalized: true,
-        finalizedAt: new Date(),
-      },
-      include: NOTE_INCLUDE,
+    const updated = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.update({
+        where: { id: note.id },
+        data: { isFinalized: true, finalizedAt: new Date() },
+        include: NOTE_INCLUDE,
+      });
     });
 
     const mapped = this.mapNote(updated);
-    this.events.emit(SOAP_NOTE_UPDATED_EVENT, {
-      sessionId,
-      note: mapped,
-    });
+    this.events.emit(SOAP_NOTE_UPDATED_EVENT, { sessionId, note: mapped });
 
     return mapped;
   }
 
-  /**
-   * Lightweight ownership check for SSE — does NOT require isFinalized.
-   * Patients can subscribe to the stream before doctor finalizes so they
-   * receive the finalization event in real time.
-   */
-  async verifyStreamAccess(sessionId: string, userId: string, role: UserRole) {
-    const note = await this.prisma.consultationNote.findUnique({
-      where: { consultationSessionId: sessionId },
-      select: {
-        doctorId: true,
-        patientId: true,
-        consultationSession: { select: { nurseId: true } },
-      },
+  async verifyStreamAccess(sessionId: string, userId: string, role: UserRole, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findUnique({
+        where: { consultationSessionId: sessionId },
+        select: {
+          doctorId: true,
+          patientId: true,
+          consultationSession: { select: { nurseId: true } },
+        },
+      });
     });
 
     if (!note) throw new NotFoundException('SOAP note tidak ditemukan');
@@ -148,9 +136,9 @@ export class SoapNotesService {
 
   // ── private helpers ────────────────────────────────────────────────────────
 
-  private async findAndAssertDoctor(sessionId: string, doctorId: string) {
-    const note = await this.prisma.consultationNote.findUnique({
-      where: { consultationSessionId: sessionId },
+  private async findAndAssertDoctor(sessionId: string, doctorId: string, tenant: TenantContext) {
+    const note = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findUnique({ where: { consultationSessionId: sessionId } });
     });
 
     if (!note) throw new NotFoundException('SOAP note tidak ditemukan');
@@ -204,6 +192,7 @@ export class SoapNotesService {
       assessment: note.assessment,
       plan: note.plan,
       summary: note.summary,
+      transcriptRaw: note.transcriptRaw ?? null,
       aiStatus: note.aiStatus,
       aiError: note.aiError,
       isFinalized: note.isFinalized,

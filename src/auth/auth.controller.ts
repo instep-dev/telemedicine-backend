@@ -1,11 +1,13 @@
 import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
-import { RegisterDto } from "./dto/register.dto";
-import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { OAuthCompleteDto } from "./dto/oauth-complete.dto";
 import type { Request, Response, CookieOptions } from "express";
 import { JwtGuard } from "./guards/jwt.guard";
+import { CurrentTenant } from "../tenant/tenant.decorator";
+import type { TenantContext } from "../tenant/tenant.interface";
+import { BadRequestException } from "@nestjs/common";
 
 @Controller("auth")
 export class AuthController {
@@ -31,63 +33,49 @@ export class AuthController {
     };
   }
 
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
   @Post("login")
   async login(
     @Body() dto: LoginDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
 
-    const result = await this.auth.login({
-      identifier: dto.identifier,
-      password: dto.password,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
-      rememberMe: dto.rememberMe,
-    });
+    const result = await this.auth.login(
+      {
+        identifier: dto.identifier,
+        password: dto.password,
+        ip: req.ip,
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+        rememberMe: dto.rememberMe,
+      },
+      tenant,
+    );
 
     res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(dto.rememberMe ? 30 : 1));
 
-    return {
-      accessToken: result.accessToken,
-      user: result.user,
-    };
-  }
-
-  @Post("register")
-  async register(@Body() dto: RegisterDto) {
-    return this.auth.register(dto);
-  }
-
-  @Post("registration/verify-email")
-  async verifyEmail(
-    @Body() dto: VerifyEmailDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.auth.verifyEmail(dto);
-
-    if (result.refreshToken) {
-      res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
-      res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
-    }
-
     return { accessToken: result.accessToken, user: result.user };
   }
 
+  // OAuth start — needs tenant to store tenantSlug in OauthState
   @Get("oauth/:provider/start")
   async oauthStart(
     @Param("provider") provider: string,
     @Query("role") role: string,
     @Query("redirect") redirectUrl: string | undefined,
     @Res() res: Response,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    const url = await this.auth.getOAuthStartUrl({ provider, role, redirectUrl });
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
+    const url = await this.auth.getOAuthStartUrl({ provider, role, redirectUrl }, tenant);
     return res.redirect(url);
   }
 
+  // OAuth callback — NO X-Tenant-Slug header (redirect from Google/Microsoft)
+  // Tenant is resolved internally from OauthState.tenantSlug
   @Get("oauth/:provider/callback")
   async oauthCallback(
     @Param("provider") provider: string,
@@ -95,14 +83,11 @@ export class AuthController {
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
-
     const result = await this.auth.handleOAuthCallback({
       provider,
       query,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
+      ip: req.ip,
+      userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
     });
 
     if (result.refreshToken) {
@@ -118,15 +103,18 @@ export class AuthController {
     @Body() dto: OAuthCompleteDto,
     @Req() req: Request,
     @Res({ passthrough: true }) res: Response,
+    @CurrentTenant() tenant: TenantContext,
   ) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
 
-    const result = await this.auth.completeOAuth({
-      ...dto,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
-    });
+    const result = await this.auth.completeOAuth(
+      {
+        ...dto,
+        ip: req.ip,
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+      },
+      tenant,
+    );
 
     res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
@@ -135,25 +123,27 @@ export class AuthController {
   }
 
   @Post("refresh")
-  async refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
+  async refresh(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
 
-    // When multiple refresh_token cookies exist (e.g. leftover from a previous
-    // session on the same localhost), cookie-parser returns the first (oldest).
-    // We always want the LAST one in the raw header because browsers append new
-    // cookies after existing ones, so the last entry is always the newest.
     const rawCookie = (req.headers.cookie as string) ?? "";
     const matches = [...rawCookie.matchAll(/(?:^|;\s*)refresh_token=([^;]+)/g)];
     const rt = matches.length > 0
       ? decodeURIComponent(matches[matches.length - 1][1].trim())
       : ((req.cookies?.["refresh_token"] as string | undefined) ?? "");
 
-    const result = await this.auth.refresh({
-      refreshToken: rt,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
-    });
+    const result = await this.auth.refresh(
+      {
+        refreshToken: rt,
+        ip: req.ip,
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+      },
+      tenant,
+    );
 
     res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
@@ -162,17 +152,24 @@ export class AuthController {
   }
 
   @Post("oauth/session")
-  async oauthSession(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
+  async oauthSession(
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
+
     const auth = String(req.headers["authorization"] || "");
     const accessToken = auth.startsWith("Bearer ") ? auth.slice(7) : "";
 
-    const result = await this.auth.oauthSession({
-      accessToken,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
-    });
+    const result = await this.auth.oauthSession(
+      {
+        accessToken,
+        ip: req.ip,
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+      },
+      tenant,
+    );
 
     res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
 
@@ -181,21 +178,28 @@ export class AuthController {
 
   @UseGuards(JwtGuard)
   @Post("logout")
-  async logout(@Req() req: any, @Res({ passthrough: true }) res: Response) {
-    const ip = req.ip;
-    const userAgent = req.headers["user-agent"];
-    const rawCookie2 = (req.headers.cookie as string) ?? "";
-    const logoutMatches = [...rawCookie2.matchAll(/(?:^|;\s*)refresh_token=([^;]+)/g)];
-    const rt = logoutMatches.length > 0
-      ? decodeURIComponent(logoutMatches[logoutMatches.length - 1][1].trim())
+  async logout(
+    @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
+
+    const rawCookie = (req.headers.cookie as string) ?? "";
+    const matches = [...rawCookie.matchAll(/(?:^|;\s*)refresh_token=([^;]+)/g)];
+    const rt = matches.length > 0
+      ? decodeURIComponent(matches[matches.length - 1][1].trim())
       : ((req.cookies?.["refresh_token"] as string | undefined) ?? undefined);
 
-    await this.auth.logout({
-      refreshToken: rt,
-      userId: req.user?.id,
-      ip,
-      userAgent: typeof userAgent === "string" ? userAgent : undefined,
-    });
+    await this.auth.logout(
+      {
+        refreshToken: rt,
+        userId: req.user?.id,
+        ip: req.ip,
+        userAgent: typeof req.headers["user-agent"] === "string" ? req.headers["user-agent"] : undefined,
+      },
+      tenant,
+    );
 
     res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     return { ok: true };
@@ -203,11 +207,9 @@ export class AuthController {
 
   @UseGuards(JwtGuard)
   @Post("logout-all")
-  async logoutAll(@Req() req: any) {
-    await this.auth.logout({
-      revokeAll: true,
-      userId: req.user.id,
-    });
+  async logoutAll(@Req() req: any, @CurrentTenant() tenant: TenantContext) {
+    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
+    await this.auth.logout({ revokeAll: true, userId: req.user.id }, tenant);
     return { ok: true };
   }
 }
