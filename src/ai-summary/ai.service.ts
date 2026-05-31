@@ -11,6 +11,7 @@ export interface AiStatusUpdatedPayload {
   sessionId: string;
   doctorId: string | null;
   nurseId: string | null;
+  patientId: string | null;
   aiStatus: string;
   aiError: string | null;
   summary?: string | null;
@@ -78,6 +79,7 @@ export class AiService {
         sessionId,
         doctorId: consultationSession.doctorId,
         nurseId,
+        patientId: consultationSession.patientId,
         aiStatus,
         aiError: null,
         ...extra,

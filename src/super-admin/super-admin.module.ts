@@ -8,8 +8,8 @@ import { SuperAdminTenantsController } from './super-admin-tenants.controller';
 import { SuperAdminTenantsService } from './super-admin-tenants.service';
 import { SuperAdminUsersController } from './super-admin-users.controller';
 import { SuperAdminUsersService } from './super-admin-users.service';
-import { SuperAdminWhitelistController } from './super-admin-whitelist.controller';
-import { SuperAdminWhitelistService } from './super-admin-whitelist.service';
+import { SuperAdminDashboardController } from './super-admin-dashboard.controller';
+import { SuperAdminDashboardService } from './super-admin-dashboard.service';
 
 @Module({
   imports: [JwtModule.register({}), PrismaModule],
@@ -17,13 +17,13 @@ import { SuperAdminWhitelistService } from './super-admin-whitelist.service';
     SuperAdminAuthController,
     SuperAdminTenantsController,
     SuperAdminUsersController,
-    SuperAdminWhitelistController,
+    SuperAdminDashboardController,
   ],
   providers: [
     SuperAdminAuthService,
     SuperAdminTenantsService,
     SuperAdminUsersService,
-    SuperAdminWhitelistService,
+    SuperAdminDashboardService,
     SuperAdminJwtStrategy,
   ],
 })

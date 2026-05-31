@@ -37,17 +37,21 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
 
     // ── DoctorProfile ─────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."DoctorProfile" (
-      "id"             TEXT         PRIMARY KEY,
-      "tenantId"       TEXT         NOT NULL,
-      "userId"         TEXT         NOT NULL UNIQUE,
-      "fullName"       TEXT         NOT NULL,
-      "email"          TEXT         NOT NULL,
-      "phone"          TEXT         NOT NULL,
-      "passwordHash"   TEXT,
-      "license"        TEXT         NOT NULL,
-      "profilePicture" TEXT,
-      "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      "updatedAt"      TIMESTAMP(3) NOT NULL,
+      "id"               TEXT         PRIMARY KEY,
+      "tenantId"         TEXT         NOT NULL,
+      "userId"           TEXT         NOT NULL UNIQUE,
+      "fullName"         TEXT         NOT NULL,
+      "email"            TEXT         NOT NULL,
+      "phone"            TEXT         NOT NULL,
+      "passwordHash"     TEXT,
+      "license"          TEXT         NOT NULL,
+      "profilePicture"   TEXT,
+      "specialization"   TEXT,
+      "poli"             TEXT,
+      "serviceCapability" TEXT,
+      "bio"              TEXT,
+      "createdAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updatedAt"        TIMESTAMP(3) NOT NULL,
       CONSTRAINT "DoctorProfile_userId_fkey" FOREIGN KEY ("userId") REFERENCES "${s}"."User"("id") ON DELETE CASCADE
     )`,
     `CREATE UNIQUE INDEX "DoctorProfile_email_tenantId_key"   ON "${s}"."DoctorProfile"("email","tenantId")`,
@@ -55,6 +59,7 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE UNIQUE INDEX "DoctorProfile_license_tenantId_key" ON "${s}"."DoctorProfile"("license","tenantId")`,
     `CREATE INDEX "DoctorProfile_tenantId_idx" ON "${s}"."DoctorProfile"("tenantId")`,
     `CREATE INDEX "DoctorProfile_license_idx"  ON "${s}"."DoctorProfile"("license")`,
+    `CREATE INDEX "DoctorProfile_poli_idx"      ON "${s}"."DoctorProfile"("poli")`,
 
     // ── AdminProfile ──────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."AdminProfile" (
@@ -86,7 +91,10 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
       "email"          TEXT         NOT NULL,
       "phone"          TEXT         NOT NULL,
       "passwordHash"   TEXT,
-      "bornDate"       TIMESTAMP(3) NOT NULL,
+      "bornDate"       TIMESTAMP(3),
+      "gender"         TEXT,
+      "mrn"            TEXT,
+      "address"        TEXT,
       "profilePicture" TEXT,
       "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "updatedAt"      TIMESTAMP(3) NOT NULL,
@@ -94,7 +102,9 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     )`,
     `CREATE UNIQUE INDEX "PatientProfile_email_tenantId_key" ON "${s}"."PatientProfile"("email","tenantId")`,
     `CREATE UNIQUE INDEX "PatientProfile_phone_tenantId_key" ON "${s}"."PatientProfile"("phone","tenantId")`,
+    `CREATE UNIQUE INDEX "PatientProfile_mrn_tenantId_key"   ON "${s}"."PatientProfile"("mrn","tenantId")`,
     `CREATE INDEX "PatientProfile_tenantId_idx" ON "${s}"."PatientProfile"("tenantId")`,
+    `CREATE INDEX "PatientProfile_mrn_idx"       ON "${s}"."PatientProfile"("mrn")`,
 
     // ── NurseProfile ──────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."NurseProfile" (
@@ -106,6 +116,7 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
       "phone"          TEXT         NOT NULL,
       "passwordHash"   TEXT,
       "nurseId"        TEXT         NOT NULL,
+      "poli"           TEXT,
       "profilePicture" TEXT,
       "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
       "updatedAt"      TIMESTAMP(3) NOT NULL,
@@ -116,6 +127,7 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE UNIQUE INDEX "NurseProfile_nurseId_tenantId_key" ON "${s}"."NurseProfile"("nurseId","tenantId")`,
     `CREATE INDEX "NurseProfile_tenantId_idx" ON "${s}"."NurseProfile"("tenantId")`,
     `CREATE INDEX "NurseProfile_nurseId_idx"  ON "${s}"."NurseProfile"("nurseId")`,
+    `CREATE INDEX "NurseProfile_poli_idx"      ON "${s}"."NurseProfile"("poli")`,
 
     // ── OAuthAccount ──────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."OAuthAccount" (
@@ -302,9 +314,11 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE INDEX "CS_status_idx"      ON "${s}"."ConsultationSession"("session_status")`,
     `CREATE INDEX "CS_sst_idx"         ON "${s}"."ConsultationSession"("scheduled_start_time")`,
     `CREATE INDEX "CS_set_idx"         ON "${s}"."ConsultationSession"("scheduled_end_time")`,
-    `CREATE INDEX "CS_did_sst_idx"     ON "${s}"."ConsultationSession"("doctor_id","scheduled_start_time")`,
-    `CREATE INDEX "CS_pid_sst_idx"     ON "${s}"."ConsultationSession"("patient_id","scheduled_start_time")`,
-    `CREATE INDEX "CS_nid_sst_idx"     ON "${s}"."ConsultationSession"("nurse_id","scheduled_start_time")`,
+    `CREATE INDEX "CS_did_sst_idx"      ON "${s}"."ConsultationSession"("doctor_id","scheduled_start_time")`,
+    `CREATE INDEX "CS_pid_sst_idx"      ON "${s}"."ConsultationSession"("patient_id","scheduled_start_time")`,
+    `CREATE INDEX "CS_nid_sst_idx"      ON "${s}"."ConsultationSession"("nurse_id","scheduled_start_time")`,
+    `CREATE INDEX "CS_did_created_idx"  ON "${s}"."ConsultationSession"("doctor_id","created_at" DESC)`,
+    `CREATE INDEX "CS_pid_created_idx"  ON "${s}"."ConsultationSession"("patient_id","created_at" DESC)`,
 
     // ── ConsultationNote ──────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."ConsultationNote" (
@@ -361,5 +375,23 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE INDEX "CSA_session_idx"  ON "${s}"."ConsultationSessionAudit"("consultation_session_id")`,
     `CREATE INDEX "CSA_actor_idx"    ON "${s}"."ConsultationSessionAudit"("actor_user_id")`,
     `CREATE INDEX "CSA_created_idx"  ON "${s}"."ConsultationSessionAudit"("created_at")`,
+
+    // ── AuditLog ──────────────────────────────────────────────────────────────
+    `CREATE TABLE "${s}"."AuditLog" (
+      "id"          TEXT         PRIMARY KEY,
+      "tenantId"    TEXT         NOT NULL,
+      "actorId"     TEXT,
+      "actorName"   TEXT,
+      "actorRole"   TEXT,
+      "action"      TEXT         NOT NULL,
+      "targetType"  TEXT,
+      "targetId"    TEXT,
+      "metadata"    JSONB,
+      "created_at"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )`,
+    `CREATE INDEX "AL_tenantId_idx"       ON "${s}"."AuditLog"("tenantId")`,
+    `CREATE INDEX "AL_tenantId_created_idx" ON "${s}"."AuditLog"("tenantId","created_at" DESC)`,
+    `CREATE INDEX "AL_actorId_idx"        ON "${s}"."AuditLog"("actorId")`,
+    `CREATE INDEX "AL_action_idx"         ON "${s}"."AuditLog"("action")`,
   ];
 }

@@ -1,10 +1,11 @@
 import { MiddlewareConsumer, Module, NestModule } from "@nestjs/common";
+import { APP_GUARD } from "@nestjs/core";
 import { ConfigModule } from "@nestjs/config";
 import { EventEmitterModule } from "@nestjs/event-emitter";
 import { PrismaModule } from "prisma/prisma.module";
 import { AuthModule } from "./auth/auth.module";
 import { ProfileModule } from "./profile/profile.module";
-import { ThrottlerModule } from "@nestjs/throttler";
+import { ThrottlerModule, ThrottlerGuard } from "@nestjs/throttler";
 import { ConsultationsModule } from "./consultations/consultations.module";
 import { TwilioModule } from "./twilio/twilio.module";
 import { ServeStaticModule } from "@nestjs/serve-static";
@@ -16,9 +17,11 @@ import { SoapNotesModule } from "./soap-notes/soap-notes.module";
 import { MulterModule } from "@nestjs/platform-express";
 import { diskStorage } from "multer";
 import { existsSync, mkdirSync } from "fs";
+import { randomBytes } from "crypto";
 import { TenantModule } from "./tenant/tenant.module";
 import { TenantMiddleware } from "./tenant/tenant.middleware";
 import { SuperAdminModule } from "./super-admin/super-admin.module";
+import { AdminManagementModule } from "./admin-management/admin-management.module";
 
 const uploadsDir = join(process.cwd(), "uploads", "profiles");
 
@@ -44,16 +47,17 @@ if (!existsSync(uploadsDir)) {
         destination: (req, file, cb) => {
           cb(null, uploadsDir);
         },
-        filename: (req, file, cb) => {
+        filename: (_req, file, cb) => {
           const timestamp = Date.now();
           const ext = file.mimetype.split("/")[1];
-          cb(null, `${timestamp}-${Math.random().toString(36).substring(7)}.${ext}`);
+          cb(null, `${timestamp}-${randomBytes(8).toString("hex")}.${ext}`);
         },
       }),
     }),
     PrismaModule,
     TenantModule,
     SuperAdminModule,
+    AdminManagementModule,
     AuthModule,
     ProfileModule,
     ConsultationsModule,
@@ -62,6 +66,12 @@ if (!existsSync(uploadsDir)) {
     CallModule,
     AiResultsModule,
     SoapNotesModule,
+  ],
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: ThrottlerGuard,
+    },
   ],
 })
 export class AppModule implements NestModule {

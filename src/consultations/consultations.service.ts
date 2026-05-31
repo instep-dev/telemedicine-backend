@@ -16,6 +16,7 @@ import type { TenantContext } from '../tenant/tenant.interface';
 import {
   CreateConsultationSessionDto,
   ListConsultationSessionsQueryDto,
+  RescheduleConsultationSessionDto,
 } from './dto/consultations.dto';
 
 const sessionWithProfilesInclude =
@@ -27,7 +28,7 @@ const sessionWithProfilesInclude =
     },
     patient: {
       include: {
-        patientProfile: { select: { fullName: true } },
+        patientProfile: { select: { fullName: true, mrn: true } },
       },
     },
     nurse: {
@@ -40,7 +41,7 @@ const sessionWithProfilesInclude =
         adminProfile: { select: { fullName: true } },
       },
     },
-    consultationNote: { select: { id: true, aiStatus: true } },
+    consultationNote: { select: { id: true, aiStatus: true, subjective: true } },
   });
 
 type SessionWithProfiles = Prisma.ConsultationSessionGetPayload<{
@@ -231,6 +232,7 @@ export class ConsultationsService {
       doctorName: this.getDoctorDisplayName(s),
       patientId: s.patientId,
       patientName: this.getPatientDisplayName(s),
+      patientMrn: s.patient.patientProfile?.mrn ?? null,
       nurseId: s.nurseId ?? null,
       nurseName: this.getNurseDisplayName(s),
       createdBy: s.createdBy,
@@ -257,6 +259,7 @@ export class ConsultationsService {
         : s.sessionStatus === 'COMPLETED' || s.sessionStatus === 'FAILED'
           ? s.nurseJoinedAt ? 'JOINED' : 'DISABLED'
           : this.canNurseJoinNow(s) ? 'JOIN' : 'DISABLED',
+      chiefComplaint: s.consultationNote?.subjective ?? null,
       consultationNote: s.consultationNote
         ? { id: s.consultationNote.id, aiStatus: s.consultationNote.aiStatus }
         : null,
@@ -387,11 +390,12 @@ export class ConsultationsService {
         scheduledEndTime = null;
       }
 
-      // Conflict check within tenant
+      // Conflict check within tenant — only sessions whose window hasn't fully passed
       const activeSessions = await tx.consultationSession.findMany({
         where: {
           OR: [{ doctorId: doctor.id }, { patientId: patient.id }],
           sessionStatus: { in: ['CREATED', 'IN_CALL'] },
+          scheduledEndTime: { gt: new Date() },
         },
         select: { sessionId: true, doctorId: true, patientId: true, scheduledStartTime: true, scheduledEndTime: true },
       });
@@ -475,18 +479,43 @@ export class ConsultationsService {
         ? { sessionStatus: query.status }
         : { sessionStatus: { in: [SessionStatus.COMPLETED, SessionStatus.FAILED] } };
 
+      const where = {
+        createdBy: adminUserId,
+        ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
+        ...statusFilter,
+        ...this.buildSearchClause(query.search),
+      };
+
+      const orderBy = this.normalizeSort(query.sort);
+
+      if (!query.limit) {
+        const rows = await tx.consultationSession.findMany({
+          where,
+          orderBy,
+          include: sessionWithProfilesInclude,
+        });
+        return rows.map((item) => this.mapSession(item));
+      }
+
+      const limit = query.limit;
       const rows = await tx.consultationSession.findMany({
-        where: {
-          createdBy: adminUserId,
-          ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
-          ...statusFilter,
-          ...this.buildSearchClause(query.search),
-        },
-        orderBy: this.normalizeSort(query.sort),
+        where,
+        orderBy,
+        take: limit + 1,
+        skip: query.cursor ? 1 : 0,
+        cursor: query.cursor ? { sessionId: query.cursor } : undefined,
         include: sessionWithProfilesInclude,
       });
 
-      return rows.map((item) => this.mapSession(item));
+      const hasNextPage = rows.length > limit;
+      const data = hasNextPage ? rows.slice(0, limit) : rows;
+      const nextCursor = hasNextPage ? data[data.length - 1].sessionId : null;
+
+      return {
+        data: data.map((item) => this.mapSession(item)),
+        nextCursor,
+        hasNextPage,
+      };
     });
   }
 
@@ -517,18 +546,53 @@ export class ConsultationsService {
       if (!patient) throw new ForbiddenException('Patient tidak ditemukan');
       this.assertRole(patient.role, UserRole.PATIENT);
 
+      const where = {
+        patientId,
+        ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
+        ...(query.status ? { sessionStatus: query.status } : {}),
+        ...this.buildSearchClause(query.search),
+      };
+
+      const orderBy = this.normalizeSort(query.sort);
+
+      if (!query.limit) {
+        const rows = await tx.consultationSession.findMany({
+          where,
+          orderBy,
+          include: sessionWithProfilesInclude,
+        });
+        return rows.map((item) => this.mapSession(item));
+      }
+
+      const limit = query.limit;
+
+      // Validate cursor belongs to this patient to prevent cursor poisoning
+      if (query.cursor) {
+        const cursorRow = await tx.consultationSession.findFirst({
+          where: { sessionId: query.cursor, patientId },
+          select: { sessionId: true },
+        });
+        if (!cursorRow) throw new NotFoundException('Cursor tidak valid');
+      }
+
       const rows = await tx.consultationSession.findMany({
-        where: {
-          patientId,
-          ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
-          ...(query.status ? { sessionStatus: query.status } : {}),
-          ...this.buildSearchClause(query.search),
-        },
-        orderBy: this.normalizeSort(query.sort),
+        where,
+        orderBy,
+        take: limit + 1,
+        skip: query.cursor ? 1 : 0,
+        cursor: query.cursor ? { sessionId: query.cursor } : undefined,
         include: sessionWithProfilesInclude,
       });
 
-      return rows.map((item) => this.mapSession(item));
+      const hasNextPage = rows.length > limit;
+      const data = hasNextPage ? rows.slice(0, limit) : rows;
+      const nextCursor = hasNextPage ? data[data.length - 1].sessionId : null;
+
+      return {
+        data: data.map((item) => this.mapSession(item)),
+        nextCursor,
+        hasNextPage,
+      };
     });
   }
 
@@ -624,6 +688,97 @@ export class ConsultationsService {
       });
 
       return note;
+    });
+  }
+
+  async cancelByAdmin(adminId: string, sessionId: string, tenant: TenantContext) {
+    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const admin = await tx.user.findUnique({ where: { id: adminId }, select: { id: true, role: true } });
+      if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
+      this.assertRole(admin.role, UserRole.ADMIN);
+
+      const session = await tx.consultationSession.findUnique({
+        where: { sessionId },
+        select: { sessionId: true, sessionType: true, sessionStatus: true, createdBy: true },
+      });
+      if (!session) throw new NotFoundException('Session tidak ditemukan');
+      if (session.createdBy !== adminId) throw new ForbiddenException('Hanya admin yang membuat session ini yang bisa cancel');
+      if (session.sessionType !== 'SCHEDULED') throw new BadRequestException('Hanya SCHEDULED session yang bisa di-cancel');
+      if (session.sessionStatus !== 'CREATED') throw new BadRequestException('Hanya session dengan status CREATED yang bisa di-cancel');
+
+      await tx.consultationSession.delete({ where: { sessionId } });
+    });
+  }
+
+  async rescheduleByAdmin(
+    adminId: string,
+    sessionId: string,
+    dto: RescheduleConsultationSessionDto,
+    tenant: TenantContext,
+  ) {
+    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const admin = await tx.user.findUnique({ where: { id: adminId }, select: { id: true, role: true } });
+      if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
+      this.assertRole(admin.role, UserRole.ADMIN);
+
+      const session = await tx.consultationSession.findUnique({
+        where: { sessionId },
+        include: sessionWithProfilesInclude,
+      });
+      if (!session) throw new NotFoundException('Session tidak ditemukan');
+      if (session.createdBy !== adminId) throw new ForbiddenException('Hanya admin yang membuat session ini yang bisa reschedule');
+      if (session.sessionType !== 'SCHEDULED') throw new BadRequestException('Hanya SCHEDULED session yang bisa di-reschedule');
+      if (session.sessionStatus !== 'CREATED') throw new BadRequestException('Hanya session dengan status CREATED yang bisa di-reschedule');
+
+      const newScheduledDate = this.toJakartaDateOnly(dto.scheduledDate);
+      const newStart = this.toJakartaDate(dto.scheduledDate, dto.scheduledStartTime);
+      const newEnd = this.toJakartaDate(dto.scheduledDate, dto.scheduledEndTime);
+
+      this.assertScheduleWindow(newStart, newEnd);
+      this.assertScheduleInFuture(newStart);
+
+      const conflictSessions = await tx.consultationSession.findMany({
+        where: {
+          sessionId: { not: sessionId },
+          OR: [{ doctorId: session.doctorId }, { patientId: session.patientId }],
+          sessionStatus: { in: ['CREATED', 'IN_CALL'] },
+          scheduledEndTime: { gt: new Date() },
+        },
+        select: { sessionId: true, doctorId: true, patientId: true, scheduledStartTime: true, scheduledEndTime: true },
+      });
+
+      for (const item of conflictSessions) {
+        if (!this.hasOverlap(item.scheduledStartTime, item.scheduledEndTime, newStart, newEnd)) continue;
+        if (item.doctorId === session.doctorId) throw new BadRequestException(`Jadwal dokter bentrok dengan session ${item.sessionId}`);
+        if (item.patientId === session.patientId) throw new BadRequestException(`Jadwal patient bentrok dengan session ${item.sessionId}`);
+      }
+
+      const updated = await tx.consultationSession.update({
+        where: { sessionId },
+        data: {
+          scheduledDate: newScheduledDate,
+          scheduledStartTime: newStart,
+          scheduledEndTime: newEnd,
+        },
+        include: sessionWithProfilesInclude,
+      });
+
+      await this.createAudit(tx, tenant.id, {
+        consultationSessionId: sessionId,
+        action: 'ADMIN_SESSION_RESCHEDULED',
+        actorUserId: adminId,
+        actorRole: UserRole.ADMIN,
+        previousStatus: SessionStatus.CREATED,
+        newStatus: SessionStatus.CREATED,
+        metadata: {
+          previousStart: session.scheduledStartTime.toISOString(),
+          previousEnd: session.scheduledEndTime?.toISOString() ?? null,
+          newStart: newStart.toISOString(),
+          newEnd: newEnd.toISOString(),
+        },
+      });
+
+      return this.mapSession(updated);
     });
   }
 

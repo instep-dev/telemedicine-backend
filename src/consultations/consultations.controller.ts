@@ -1,9 +1,13 @@
 import {
   Body,
   Controller,
+  Delete,
   ForbiddenException,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -16,6 +20,7 @@ import type { TenantContext } from '../tenant/tenant.interface';
 import {
   CreateConsultationSessionDto,
   ListConsultationSessionsQueryDto,
+  RescheduleConsultationSessionDto,
 } from './dto/consultations.dto';
 import { ConsultationsService } from './consultations.service';
 
@@ -88,6 +93,28 @@ export class ConsultationsController {
   ) {
     this.requireRole(req.user.role, UserRole.NURSE);
     return this.consultations.listNurseSessions(req.user.id, query, tenant);
+  }
+
+  @Delete('sessions/:sessionId')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async cancelSession(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    this.requireRole(req.user.role, UserRole.ADMIN);
+    return this.consultations.cancelByAdmin(req.user.id, sessionId, tenant);
+  }
+
+  @Patch('sessions/:sessionId/reschedule')
+  async rescheduleSession(
+    @Req() req: any,
+    @Param('sessionId') sessionId: string,
+    @Body() dto: RescheduleConsultationSessionDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    this.requireRole(req.user.role, UserRole.ADMIN);
+    return this.consultations.rescheduleByAdmin(req.user.id, sessionId, dto, tenant);
   }
 
   @Get('sessions/:sessionId')

@@ -5,6 +5,21 @@ import type { Prisma } from '@prisma/client';
 
 const VALID_SCHEMA_RE = /^[a-z][a-z0-9_]*$/;
 
+// Public schema: 5 connections (auth, tenant registry, pending registrations)
+// Tenant schema: 3 connections each × up to 20 tenants = 60 max
+// Total ceiling: ~65 connections — safe for Neon free (100 limit) and paid tiers
+const PUBLIC_POOL_CONFIG = {
+  max: 5,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+} as const;
+
+const TENANT_POOL_CONFIG = {
+  max: 3,
+  idleTimeoutMillis: 30_000,
+  connectionTimeoutMillis: 5_000,
+} as const;
+
 @Injectable()
 export class PrismaService extends PrismaClient implements OnModuleInit, OnModuleDestroy {
   private readonly tenantClients = new Map<string, PrismaClient>();
@@ -12,6 +27,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   constructor() {
     const adapter = new PrismaPg({
       connectionString: process.env.DATABASE_URL!,
+      ...PUBLIC_POOL_CONFIG,
     });
     super({ adapter });
   }
@@ -27,17 +43,16 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$disconnect();
   }
 
-  /**
-   * Returns (or creates) a PrismaClient scoped to a specific tenant schema.
-   * Uses PrismaPg's official `schema` option so all queries target the correct schema.
-   */
   private getTenantClient(schemaName: string): PrismaClient {
     if (!VALID_SCHEMA_RE.test(schemaName)) {
       throw new Error(`Invalid schema name: ${schemaName}`);
     }
     if (!this.tenantClients.has(schemaName)) {
       const adapter = new PrismaPg(
-        { connectionString: process.env.DATABASE_URL! },
+        {
+          connectionString: process.env.DATABASE_URL!,
+          ...TENANT_POOL_CONFIG,
+        },
         { schema: schemaName },
       );
       this.tenantClients.set(schemaName, new PrismaClient({ adapter }));
@@ -45,9 +60,6 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     return this.tenantClients.get(schemaName)!;
   }
 
-  /**
-   * Run all Prisma queries inside `fn` against a specific tenant schema.
-   */
   async withTenantSchema<T>(
     schemaName: string,
     fn: (tx: Prisma.TransactionClient) => Promise<T>,

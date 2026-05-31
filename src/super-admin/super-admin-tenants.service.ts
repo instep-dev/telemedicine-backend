@@ -48,7 +48,6 @@ export class SuperAdminTenantsService {
     const tenantId = randomUUID();
     const schemaName = `tenant_${slug.replace(/-/g, '_')}`;
 
-    // Provision PostgreSQL schema + all tables
     await this.provisionSchema(schemaName);
 
     const tenant = await this.prisma.tenantRegistry.create({
@@ -58,8 +57,11 @@ export class SuperAdminTenantsService {
         name: dto.name.trim(),
         schemaName,
         status: 'active',
+        serviceType: dto.serviceType ?? null,
+        subscriptionPlan: dto.subscriptionPlan ?? null,
         adminEmail: dto.adminEmail ?? null,
         contactPhone: dto.contactPhone ?? null,
+        address: dto.address ?? null,
       },
     });
 
@@ -73,8 +75,12 @@ export class SuperAdminTenantsService {
       where: { id },
       data: {
         ...(dto.name && { name: dto.name.trim() }),
+        ...(dto.serviceType !== undefined && { serviceType: dto.serviceType }),
+        ...(dto.subscriptionPlan !== undefined && { subscriptionPlan: dto.subscriptionPlan }),
+        ...(dto.status !== undefined && { status: dto.status }),
         ...(dto.adminEmail !== undefined && { adminEmail: dto.adminEmail }),
         ...(dto.contactPhone !== undefined && { contactPhone: dto.contactPhone }),
+        ...(dto.address !== undefined && { address: dto.address }),
       },
     });
   }
@@ -107,6 +113,31 @@ export class SuperAdminTenantsService {
       status: 'inactive',
     } satisfies TenantStatusChangedPayload);
     return tenant;
+  }
+
+  async runMigrationOnAllSchemas(statements: string[]): Promise<{ schema: string; ok: boolean; error?: string }[]> {
+    const tenants = await this.prisma.tenantRegistry.findMany({ select: { schemaName: true } });
+    const results: { schema: string; ok: boolean; error?: string }[] = [];
+
+    for (const tenant of tenants) {
+      const s = tenant.schemaName;
+      if (!/^[a-z][a-z0-9_]*$/.test(s)) {
+        results.push({ schema: s, ok: false, error: 'Invalid schema name' });
+        continue;
+      }
+
+      try {
+        for (const tpl of statements) {
+          const sql = tpl.replace(/\{\{schema\}\}/g, s);
+          await this.prisma.$executeRawUnsafe(sql);
+        }
+        results.push({ schema: s, ok: true });
+      } catch (err: any) {
+        results.push({ schema: s, ok: false, error: err?.message ?? String(err) });
+      }
+    }
+
+    return results;
   }
 
   private async provisionSchema(schemaName: string): Promise<void> {

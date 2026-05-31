@@ -2,8 +2,6 @@ import { Body, Controller, Get, Param, Post, Query, Req, Res, UseGuards } from "
 import { Throttle } from "@nestjs/throttler";
 import { AuthService } from "./auth.service";
 import { LoginDto } from "./dto/login.dto";
-import { RegisterDto } from "./dto/register.dto";
-import { VerifyEmailDto } from "./dto/verify-email.dto";
 import { OAuthCompleteDto } from "./dto/oauth-complete.dto";
 import type { Request, Response, CookieOptions } from "express";
 import { JwtGuard } from "./guards/jwt.guard";
@@ -58,31 +56,6 @@ export class AuthController {
 
     res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
     res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(dto.rememberMe ? 30 : 1));
-
-    return { accessToken: result.accessToken, user: result.user };
-  }
-
-  @Throttle({ default: { limit: 5, ttl: 60000 } })
-  @Post("register")
-  async register(@Body() dto: RegisterDto, @CurrentTenant() tenant: TenantContext) {
-    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
-    return this.auth.register(dto, tenant);
-  }
-
-  @Throttle({ default: { limit: 10, ttl: 60000 } })
-  @Post("registration/verify-email")
-  async verifyEmail(
-    @Body() dto: VerifyEmailDto,
-    @Res({ passthrough: true }) res: Response,
-    @CurrentTenant() tenant: TenantContext,
-  ) {
-    if (!tenant) throw new BadRequestException("Missing X-Tenant-Slug header");
-    const result = await this.auth.verifyEmail(dto, tenant);
-
-    if (result.refreshToken) {
-      res.clearCookie("refresh_token", this.clearRefreshCookieOptions());
-      res.cookie("refresh_token", result.refreshToken, this.refreshCookieOptions(30));
-    }
 
     return { accessToken: result.accessToken, user: result.user };
   }

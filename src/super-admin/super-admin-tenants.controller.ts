@@ -1,4 +1,4 @@
-import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Res, Sse, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Res, Sse, UseGuards, HttpCode } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { Observable, Subject } from 'rxjs';
 import { map } from 'rxjs/operators';
@@ -68,5 +68,14 @@ export class SuperAdminTenantsController {
   @Patch(':id/deactivate')
   deactivate(@Param('id') id: string) {
     return this.tenantsService.deactivate(id);
+  }
+
+  // Run arbitrary DDL statements on all tenant schemas.
+  // Use {{schema}} as placeholder — it will be replaced with each schema name.
+  // Example body: { "statements": ["CREATE INDEX IF NOT EXISTS \"idx\" ON \"{{schema}}\".\"Table\"(col)"] }
+  @Post('migrate-schemas')
+  @HttpCode(200)
+  migrateSchemas(@Body() body: { statements: string[] }) {
+    return this.tenantsService.runMigrationOnAllSchemas(body.statements ?? []);
   }
 }

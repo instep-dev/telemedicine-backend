@@ -30,11 +30,34 @@ export class AiResultsService {
     return 'newest';
   }
 
+  private buildStatusBucketFilter(bucket?: string): any {
+    if (bucket === 'success') return { aiStatus: 'SUCCESS' };
+    if (bucket === 'failed') {
+      return { OR: [{ aiStatus: 'FAILED' }, { aiStatus: { contains: 'ERROR', mode: 'insensitive' } }] };
+    }
+    if (bucket === 'in-progress') {
+      return {
+        OR: [
+          { aiStatus: null },
+          {
+            AND: [
+              { NOT: { aiStatus: 'SUCCESS' } },
+              { NOT: { aiStatus: 'FAILED' } },
+              { NOT: { aiStatus: { contains: 'ERROR', mode: 'insensitive' } } },
+            ],
+          },
+        ],
+      };
+    }
+    return {};
+  }
+
   async findAllByDoctor(doctorId: string, query: GetAiResultsQueryDto, tenant: TenantContext) {
     const limit = this.normalizeLimit(query.limit);
     const cursor = query.cursor?.trim() || undefined;
     const search = query.search?.trim() || undefined;
     const sort = this.normalizeSort(query.sort);
+    const bucketFilter = this.buildStatusBucketFilter(query.statusBucket);
 
     const orderBy =
       sort === 'oldest'
@@ -44,6 +67,7 @@ export class AiResultsService {
     const whereClause: any = {
       doctorId,
       consultationSession: { sessionStatus: 'COMPLETED' },
+      ...bucketFilter,
       ...(search
         ? {
             OR: [
@@ -162,6 +186,7 @@ export class AiResultsService {
     const cursor = query.cursor?.trim() || undefined;
     const search = query.search?.trim() || undefined;
     const sort = this.normalizeSort(query.sort);
+    const bucketFilter = this.buildStatusBucketFilter(query.statusBucket);
 
     const orderBy =
       sort === 'oldest'
@@ -170,6 +195,7 @@ export class AiResultsService {
 
     const whereClause: any = {
       consultationSession: { nurseId, sessionStatus: 'COMPLETED' },
+      ...bucketFilter,
       ...(search
         ? {
             OR: [
@@ -268,6 +294,119 @@ export class AiResultsService {
           durationSec: item.consultationSession.durationSec,
           status: item.consultationSession.sessionStatus,
           roomSid: item.consultationSession.twilioRoomSid,
+          roomName: item.consultationSession.roomName,
+          patientIdentity: item.consultationSession.patientIdentity,
+          patientName: item.consultationSession.patientName ?? null,
+          createdAt: item.consultationSession.createdAt,
+        },
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+      pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
+    };
+  }
+
+  async findAllByPatient(patientId: string, query: GetAiResultsQueryDto, tenant: TenantContext) {
+    const limit = this.normalizeLimit(query.limit);
+    const cursor = query.cursor?.trim() || undefined;
+    const search = query.search?.trim() || undefined;
+    const sort = this.normalizeSort(query.sort);
+    const bucketFilter = this.buildStatusBucketFilter(query.statusBucket);
+
+    const orderBy =
+      sort === 'oldest'
+        ? [{ createdAt: 'asc' as const }, { id: 'asc' as const }]
+        : [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
+
+    const whereClause: any = {
+      consultationSession: { patientId, sessionStatus: 'COMPLETED' },
+      ...bucketFilter,
+      ...(search
+        ? {
+            OR: [
+              { summary: { contains: search, mode: 'insensitive' } },
+              { aiStatus: { contains: search, mode: 'insensitive' } },
+              { consultationSession: { roomName: { contains: search, mode: 'insensitive' } } },
+              { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
+            ],
+          }
+        : {}),
+    };
+
+    // Validate cursor belongs to this patient — prevents cursor poisoning across patients
+    if (cursor) {
+      const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationNote.findFirst({
+          where: { id: cursor, consultationSession: { patientId } },
+          select: { id: true },
+        });
+      });
+      if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan');
+    }
+
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationNote.findMany({
+        where: whereClause,
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        orderBy,
+        include: {
+          consultationSession: {
+            select: {
+              sessionId: true,
+              sessionStatus: true,
+              roomName: true,
+              patientName: true,
+              patientIdentity: true,
+              startedAt: true,
+              endedAt: true,
+              durationSec: true,
+              consultationMode: true,
+              sessionType: true,
+              createdAt: true,
+              updatedAt: true,
+              doctor: { select: { id: true, name: true } },
+            },
+          },
+        },
+      });
+    });
+
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1].id : null;
+
+    return {
+      data: items.map((item) => ({
+        id: item.id,
+        consultationId: item.consultationSessionId,
+        sessionId: item.consultationSessionId,
+        doctorId: item.doctorId,
+        doctorName: item.consultationSession.doctor?.name ?? null,
+        roomName: item.consultationSession.roomName,
+        patientIdentity: item.consultationSession.patientIdentity,
+        patientName: item.consultationSession.patientName ?? null,
+        consultationStatus: item.consultationSession.sessionStatus,
+        consultationMode: item.consultationSession.consultationMode,
+        sessionType: item.consultationSession.sessionType,
+        consultationStartedAt: item.consultationSession.startedAt,
+        consultationEndedAt: item.consultationSession.endedAt,
+        summary: item.summary,
+        subjective: item.subjective,
+        objective: item.objective,
+        assessment: item.assessment,
+        plan: item.plan,
+        transcriptRaw: null, // never expose raw transcript to patients
+        aiStatus: item.aiStatus,
+        aiError: item.aiError,
+        transcribedAt: item.transcribedAt,
+        summarizedAt: item.summarizedAt,
+        aiModel: item.aiModel,
+        callSession: {
+          id: item.consultationSession.sessionId,
+          durationSec: item.consultationSession.durationSec,
+          status: item.consultationSession.sessionStatus,
+          roomSid: null,
           roomName: item.consultationSession.roomName,
           patientIdentity: item.consultationSession.patientIdentity,
           patientName: item.consultationSession.patientName ?? null,

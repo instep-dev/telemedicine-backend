@@ -65,12 +65,16 @@ model DoctorProfile {
   userId       String  @unique
   user         User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  fullName       String
-  email          String
-  phone          String
-  passwordHash   String?
-  license        String
-  profilePicture String?
+  fullName         String
+  email            String
+  phone            String
+  passwordHash     String?
+  license          String
+  profilePicture   String?
+  specialization   String?
+  poli             String?
+  serviceCapability String?
+  bio              String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -80,6 +84,7 @@ model DoctorProfile {
   @@unique([license, tenantId])
   @@index([tenantId])
   @@index([license])
+  @@index([poli])
 }
 
 model AdminProfile {
@@ -115,7 +120,10 @@ model PatientProfile {
   email          String
   phone          String
   passwordHash   String?
-  bornDate       DateTime
+  bornDate       DateTime?
+  gender         String?
+  mrn            String?
+  address        String?
   profilePicture String?
 
   createdAt DateTime @default(now())
@@ -123,7 +131,9 @@ model PatientProfile {
 
   @@unique([email, tenantId])
   @@unique([phone, tenantId])
+  @@unique([mrn, tenantId])
   @@index([tenantId])
+  @@index([mrn])
 }
 
 model NurseProfile {
@@ -137,6 +147,7 @@ model NurseProfile {
   phone          String
   passwordHash   String?
   nurseId        String
+  poli           String?
   profilePicture String?
 
   createdAt DateTime @default(now())
@@ -147,6 +158,7 @@ model NurseProfile {
   @@unique([nurseId, tenantId])
   @@index([tenantId])
   @@index([nurseId])
+  @@index([poli])
 }
 
 model OauthAccount {
@@ -370,6 +382,8 @@ model ConsultationSession {
   @@index([doctorId, scheduledStartTime])
   @@index([patientId, scheduledStartTime])
   @@index([nurseId, scheduledStartTime])
+  @@index([doctorId, createdAt(sort: Desc)])
+  @@index([patientId, createdAt(sort: Desc)])
   @@map("ConsultationSession")
 }
 
@@ -442,6 +456,25 @@ model ConsultationSessionAudit {
   @@map("ConsultationSessionAudit")
 }
 
+model AuditLog {
+  id         String   @id @default(uuid())
+  tenantId   String
+  actorId    String?
+  actorName  String?
+  actorRole  String?
+  action     String
+  targetType String?
+  targetId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([tenantId])
+  @@index([tenantId, createdAt(sort: Desc)])
+  @@index([actorId])
+  @@index([action])
+  @@map("AuditLog")
+}
+
 // ─── Public schema models (ephemeral / global) ────────────────────────────────
 // These stay in default search_path (public). No withTenantSchema needed.
 
@@ -474,15 +507,18 @@ model SuperAdminRefreshToken {
 }
 
 model TenantRegistry {
-  id           String   @id
-  slug         String   @unique
-  name         String
-  schemaName   String   @unique @map("schema_name")
-  status       String   @default("active")
-  adminEmail   String?  @map("admin_email")
-  contactPhone String?  @map("contact_phone")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id               String   @id
+  slug             String   @unique
+  name             String
+  schemaName       String   @unique @map("schema_name")
+  status           String   @default("active")
+  serviceType      String?  @map("service_type")
+  subscriptionPlan String?  @map("subscription_plan")
+  adminEmail       String?  @map("admin_email")
+  contactPhone     String?  @map("contact_phone")
+  address          String?
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
 
   @@map("tenant_registry")
 }

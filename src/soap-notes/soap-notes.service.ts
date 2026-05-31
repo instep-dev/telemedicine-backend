@@ -192,6 +192,7 @@ export class SoapNotesService {
       assessment: note.assessment,
       plan: note.plan,
       summary: note.summary,
+      transcriptRaw: note.transcriptRaw ?? null,
       aiStatus: note.aiStatus,
       aiError: note.aiError,
       isFinalized: note.isFinalized,

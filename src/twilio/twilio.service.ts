@@ -34,12 +34,26 @@ interface TenantRow {
 @Injectable()
 export class TwilioService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(TwilioService.name);
-  private readonly statusCallbackUrl =
-    process.env.TWILIO_VIDEO_STATUS_CALLBACK_URL ||
-    `${process.env.APP_BASE_URL}/twilio/webhooks/video-room`;
+  private readonly statusCallbackUrl = (() => {
+    const explicit = process.env.TWILIO_VIDEO_STATUS_CALLBACK_URL;
+    const fallback = `${process.env.APP_BASE_URL}/twilio/webhooks/video-room`;
+    const url = explicit || fallback;
+    // Catch ngrok URLs accidentally left in production env vars
+    if (process.env.NODE_ENV === 'production' && url.includes('ngrok')) {
+      throw new Error(
+        '[TwilioService] TWILIO_VIDEO_STATUS_CALLBACK_URL is an ngrok URL in production. ' +
+        'Remove TWILIO_VIDEO_STATUS_CALLBACK_URL from env and set APP_BASE_URL to your production backend URL.',
+      );
+    }
+    return url;
+  })();
 
   private autoEndTimer: NodeJS.Timeout | null = null;
   private autoEndRunning = false;
+
+  // Cache tenant list 5 menit — menghindari query public.tenant_registry setiap 30 detik
+  private tenantCache: { data: TenantContext[]; expiry: number } | null = null;
+  private readonly TENANT_CACHE_TTL_MS = 5 * 60_000;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -71,6 +85,22 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       SELECT id, slug, schema_name FROM public.tenant_registry WHERE status = 'active'
     `;
     return rows.map((r) => ({ id: r.id, slug: r.slug, schemaName: r.schema_name }));
+  }
+
+  /** Tenant list di-cache 5 menit untuk mengurangi query setiap polling cycle. */
+  private async getCachedActiveTenants(): Promise<TenantContext[]> {
+    const now = Date.now();
+    if (this.tenantCache && now < this.tenantCache.expiry) {
+      return this.tenantCache.data;
+    }
+    const data = await this.getAllActiveTenants();
+    this.tenantCache = { data, expiry: now + this.TENANT_CACHE_TTL_MS };
+    return data;
+  }
+
+  /** Invalidasi cache — dipanggil saat tenant baru dibuat atau status berubah. */
+  invalidateTenantCache() {
+    this.tenantCache = null;
   }
 
   async findSessionWithTenant(
@@ -142,6 +172,29 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Hitung TTL token Twilio berdasarkan sisa waktu sesi.
+   * Untuk sesi INSTANT: 4 jam. Untuk sesi SCHEDULED: sisa waktu + buffer 5 menit.
+   * Batas maksimum 4 jam, minimum 5 menit.
+   */
+  private calculateTokenTtl(session: {
+    sessionType: SessionType;
+    scheduledEndTime: Date | null;
+  }): number {
+    const MAX_TTL = 4 * 60 * 60;  // 4 jam
+    const MIN_TTL = 5 * 60;        // 5 menit minimum
+
+    if (session.sessionType === SessionType.INSTANT || !session.scheduledEndTime) {
+      return MAX_TTL;
+    }
+
+    const remainingSec = Math.floor(
+      (session.scheduledEndTime.getTime() - Date.now()) / 1000,
+    );
+    // Tambah 5 menit buffer agar tidak putus tepat di akhir window
+    return Math.max(MIN_TTL, Math.min(remainingSec + 5 * 60, MAX_TTL));
+  }
+
   private calculateDuration(startedAt: Date | null, endedAt: Date) {
     if (!startedAt) return { durationSec: 0, durationMinutes: 1 };
     const diffSec = Math.max(
@@ -180,44 +233,57 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     this.autoEndRunning = true;
 
     try {
-      const tenants = await this.getAllActiveTenants();
+      // Gunakan cache agar tidak query DB setiap 30 detik
+      const tenants = await this.getCachedActiveTenants();
 
-      for (const tenant of tenants) {
-        const now = new Date();
-        const dueSessions = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
-          return tx.consultationSession.findMany({
-            where: {
-              sessionType: 'SCHEDULED',
-              sessionStatus: { in: ['CREATED', 'IN_CALL'] },
-              scheduledEndTime: { lte: now },
-            },
-            select: {
-              sessionId: true,
-              doctorId: true,
-              doctorJoinedAt: true,
-              patientJoinedAt: true,
-            },
-          });
-        });
-
-        for (const session of dueSessions) {
-          if (session.doctorJoinedAt && session.patientJoinedAt) {
-            await this.completeSessionInternal(
-              session.sessionId,
-              session.doctorId,
-              'AUTO_END_COMPLETED',
-              true,
-              tenant,
-            );
-          } else {
-            await this.failSessionInternal(session.sessionId, 'AUTO_END_FAILED', true, tenant);
-          }
-        }
-      }
+      // Proses semua tenant secara PARALEL (bukan sequential)
+      // Dengan 20 tenant: dari ~20 × query_time → max(query_time)
+      await Promise.all(tenants.map((tenant) => this.processAutoEndForTenant(tenant)));
     } catch (error: any) {
       this.logger.error(`auto-end cycle failed: ${error?.message || error}`);
     } finally {
       this.autoEndRunning = false;
+    }
+  }
+
+  private async processAutoEndForTenant(tenant: TenantContext) {
+    const now = new Date();
+    try {
+      const dueSessions = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationSession.findMany({
+          where: {
+            sessionType: 'SCHEDULED',
+            sessionStatus: { in: ['CREATED', 'IN_CALL'] },
+            scheduledEndTime: { lte: now },
+          },
+          select: {
+            sessionId: true,
+            doctorId: true,
+            doctorJoinedAt: true,
+            patientJoinedAt: true,
+          },
+        });
+      });
+
+      // Proses sesi due juga secara paralel per tenant
+      await Promise.all(
+        dueSessions.map((session) =>
+          session.doctorJoinedAt && session.patientJoinedAt
+            ? this.completeSessionInternal(
+                session.sessionId,
+                session.doctorId,
+                'AUTO_END_COMPLETED',
+                true,
+                tenant,
+              )
+            : this.failSessionInternal(session.sessionId, 'AUTO_END_FAILED', true, tenant),
+        ),
+      );
+    } catch (error: any) {
+      // Per-tenant error tidak boleh mematikan cycle keseluruhan
+      this.logger.error(
+        `auto-end failed for tenant=${tenant.slug}: ${error?.message || error}`,
+      );
     }
   }
 
@@ -485,7 +551,8 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     });
 
     const provider = this.getProvider(session.consultationMode);
-    const token = provider.generateToken(identity, session.roomName);
+    const ttl = this.calculateTokenTtl(session);
+    const token = provider.generateToken(identity, session.roomName, ttl);
 
     const participantNames: Record<string, string> = {};
     if (session.doctor.twilioIdentity) {
@@ -506,6 +573,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       sessionId: session.sessionId,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      tokenTtlSec: ttl,
       participantNames,
     };
   }
@@ -563,7 +631,8 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     });
 
     const provider = this.getProvider(session.consultationMode);
-    const token = provider.generateToken(identity, session.roomName);
+    const ttl = this.calculateTokenTtl(session);
+    const token = provider.generateToken(identity, session.roomName, ttl);
 
     const participantNames: Record<string, string> = {};
     if (session.doctor.twilioIdentity) {
@@ -585,6 +654,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       patientName,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      tokenTtlSec: ttl,
       participantNames,
     };
   }
@@ -639,7 +709,8 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     });
 
     const provider = this.getProvider(session.consultationMode);
-    const token = provider.generateToken(identity, session.roomName);
+    const ttl = this.calculateTokenTtl(session);
+    const token = provider.generateToken(identity, session.roomName, ttl);
 
     const participantNames: Record<string, string> = {};
     if (session.doctor?.twilioIdentity) {
@@ -658,6 +729,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       sessionId: session.sessionId,
       consultationMode: session.consultationMode,
       sessionType: session.sessionType,
+      tokenTtlSec: ttl,
       participantNames,
     };
   }

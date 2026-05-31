@@ -14,8 +14,8 @@ import {
 } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 import { UserRole } from '@prisma/client';
-import { Observable, Subject } from 'rxjs';
-import { filter, map } from 'rxjs/operators';
+import { interval, merge, Observable, Subject } from 'rxjs';
+import { filter, map, takeUntil } from 'rxjs/operators';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { CurrentTenant } from '../tenant/tenant.decorator';
 import type { TenantContext } from '../tenant/tenant.interface';
@@ -85,7 +85,12 @@ export class SoapNotesController {
 
     const role = req.user.role as UserRole;
 
-    return this.sseSubject.pipe(
+    // Cleanup saat client disconnect — mencegah memory leak di koneksi ribuan user
+    const disconnect$ = new Subject<void>();
+    req.on('close', () => disconnect$.next());
+
+    const events$ = this.sseSubject.pipe(
+      takeUntil(disconnect$),
       filter((event) => event.sessionId === sessionId),
       filter(
         (event) =>
@@ -96,6 +101,14 @@ export class SoapNotesController {
         data: { type: 'NOTE_UPDATED', note: event.note },
       }) as MessageEvent),
     );
+
+    // Heartbeat 25 detik — mencegah koneksi idle ditutup proxy
+    const heartbeat$ = interval(25_000).pipe(
+      takeUntil(disconnect$),
+      map(() => ({ data: { type: 'heartbeat' } }) as MessageEvent),
+    );
+
+    return merge(events$, heartbeat$);
   }
 
   @OnEvent(SOAP_NOTE_UPDATED_EVENT)
