@@ -1,7 +1,7 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
--- CLEAN SLATE SCRIPT — Database kosong total
+-- CLEAN SLATE SCRIPT — Database kosong total + SuperAdmin seed
 -- Paste ke pgAdmin / Neon SQL Editor → Run
--- Drops semua → rebuild public schema infrastructure → TIDAK ada data
+-- Drops semua → rebuild public schema infrastructure → seed SuperAdmin
 -- Tenant schema dibuat otomatis via aplikasi saat superAdmin tambah tenant
 -- ═══════════════════════════════════════════════════════════════════════════════
 
@@ -157,15 +157,31 @@ CREATE INDEX "PendingRegistration_phone_idx"      ON public."PendingRegistration
 CREATE INDEX "PendingRegistration_expiresAt_idx"  ON public."PendingRegistration"("expiresAt");
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- PHASE 4: SEED SUPER ADMIN
+-- email    : it.development@instep.id
+-- password : password123!
+-- Hash bcrypt cost 10 — kompatibel dengan bcryptjs yang dipakai backend
+-- ─────────────────────────────────────────────────────────────────────────────
+
+INSERT INTO public."SuperAdmin" ("id", "email", "name", "passwordHash", "createdAt", "updatedAt")
+VALUES (
+  gen_random_uuid()::text,
+  'it.development@instep.id',
+  'IT Development',
+  '$2a$10$7kdS/Vy9QmKCwdrlBNPGQumMigtJnZ0tjnW4pNie7VDVV8vjF3lf2',
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+);
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- VERIFIKASI
 -- ─────────────────────────────────────────────────────────────────────────────
 SET search_path TO public;
 
 DO $$
 BEGIN
-  RAISE NOTICE '=== CLEAN SLATE SELESAI ===';
+  RAISE NOTICE '=== CLEAN SLATE + SEED SELESAI ===';
   RAISE NOTICE 'Public tables: SuperAdmin, SuperAdminRefreshToken, tenant_registry, OAuthState, OAuthPending, PendingRegistration';
-  RAISE NOTICE 'Semua tabel KOSONG — tidak ada data';
+  RAISE NOTICE 'SuperAdmin seeded: it.development@instep.id / password123!';
   RAISE NOTICE 'Tenant schema akan dibuat otomatis via app saat superAdmin tambah tenant';
-  RAISE NOTICE 'Langkah berikutnya: buat akun SuperAdmin via seed script atau langsung di DB';
 END $$;
