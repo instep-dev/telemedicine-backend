@@ -1,8 +1,16 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
--- CLEAN SLATE SCRIPT — Database kosong total + SuperAdmin seed
--- Paste ke pgAdmin / Neon SQL Editor → Run
--- Drops semua → rebuild public schema infrastructure → seed SuperAdmin
--- Tenant schema dibuat otomatis via aplikasi saat superAdmin tambah tenant
+-- CLEAN SLATE SCRIPT v2 — Database kosong total + SuperAdmin seed
+-- Paste ke Neon SQL Editor → Run
+--
+-- Yang dilakukan script ini:
+--   1. Drop semua tenant schema + public tables + enums
+--   2. Rebuild public schema (SuperAdmin, tenant_registry, OAuth, PendingRegistration)
+--   3. Seed SuperAdmin: it.development@instep.id / password123!
+--
+-- Setelah script ini selesai:
+--   - Login ke super-admin panel
+--   - Tambah tenant → schema tenant dibuat otomatis oleh app
+--   - Schema tenant sudah include semua fitur terbaru (ServiceType, dll)
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -59,10 +67,9 @@ CREATE TYPE public."SessionStatus"    AS ENUM ('CREATED', 'IN_CALL', 'COMPLETED'
 CREATE TYPE public."AuthAction"       AS ENUM ('REGISTER', 'LOGIN', 'LOGOUT', 'REFRESH', 'TOKEN_REVOKE');
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- PHASE 3: PUBLIC SCHEMA TABLES (semua kosong, tidak ada data)
+-- PHASE 3: PUBLIC SCHEMA TABLES
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- SuperAdmin
 CREATE TABLE public."SuperAdmin" (
   "id"           TEXT         PRIMARY KEY,
   "email"        VARCHAR(255) NOT NULL UNIQUE,
@@ -88,7 +95,6 @@ CREATE TABLE public."SuperAdminRefreshToken" (
 CREATE INDEX "SuperAdminRefreshToken_superAdminId_idx" ON public."SuperAdminRefreshToken"("superAdminId");
 CREATE INDEX "SuperAdminRefreshToken_expiresAt_idx"    ON public."SuperAdminRefreshToken"("expiresAt");
 
--- Tenant registry
 CREATE TABLE public.tenant_registry (
   id                TEXT         PRIMARY KEY,
   slug              VARCHAR(100) NOT NULL UNIQUE,
@@ -106,7 +112,6 @@ CREATE TABLE public.tenant_registry (
 CREATE INDEX tenant_registry_slug_idx   ON public.tenant_registry (slug);
 CREATE INDEX tenant_registry_status_idx ON public.tenant_registry (status);
 
--- OAuth ephemeral tables
 CREATE TABLE public."OAuthState" (
   "id"          TEXT          PRIMARY KEY,
   "tenantSlug"  TEXT          NOT NULL,
@@ -160,7 +165,6 @@ CREATE INDEX "PendingRegistration_expiresAt_idx"  ON public."PendingRegistration
 -- PHASE 4: SEED SUPER ADMIN
 -- email    : it.development@instep.id
 -- password : password123!
--- Hash bcrypt cost 10 — kompatibel dengan bcryptjs yang dipakai backend
 -- ─────────────────────────────────────────────────────────────────────────────
 
 INSERT INTO public."SuperAdmin" ("id", "email", "name", "passwordHash", "createdAt", "updatedAt")
@@ -174,14 +178,17 @@ VALUES (
 );
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- VERIFIKASI
+-- DONE
 -- ─────────────────────────────────────────────────────────────────────────────
 SET search_path TO public;
 
 DO $$
 BEGIN
-  RAISE NOTICE '=== CLEAN SLATE + SEED SELESAI ===';
-  RAISE NOTICE 'Public tables: SuperAdmin, SuperAdminRefreshToken, tenant_registry, OAuthState, OAuthPending, PendingRegistration';
-  RAISE NOTICE 'SuperAdmin seeded: it.development@instep.id / password123!';
-  RAISE NOTICE 'Tenant schema akan dibuat otomatis via app saat superAdmin tambah tenant';
+  RAISE NOTICE '=== CLEAN SLATE v2 SELESAI ===';
+  RAISE NOTICE 'SuperAdmin: it.development@instep.id / password123!';
+  RAISE NOTICE 'Langkah selanjutnya:';
+  RAISE NOTICE '  1. Deploy backend terbaru ke Railway';
+  RAISE NOTICE '  2. Login super-admin panel';
+  RAISE NOTICE '  3. Tambah tenant → schema otomatis dibuat dengan fitur terbaru';
+  RAISE NOTICE 'Fitur baru di tenant schema: ServiceType, reasonForVisit, patientInstructions, internalNotes, checkInName';
 END $$;

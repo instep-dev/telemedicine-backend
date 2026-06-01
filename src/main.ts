@@ -57,7 +57,7 @@ async function bootstrap() {
   });
 
   const isProd = process.env.NODE_ENV === "production";
-  const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN ?? "telemedicine.instep.id";
+  const baseDomain = process.env.NEXT_PUBLIC_BASE_DOMAIN ?? "telemed.instep.id";
   // Escape ALL dots in the domain (String.replace replaces only the first occurrence)
   const escapedDomain = baseDomain.replace(/\./g, "\\.");
 

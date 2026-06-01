@@ -155,9 +155,13 @@ export class ConsultationsController {
   }
 
   @Get('lookups/patients')
-  async listPatients(@Req() req: any, @CurrentTenant() tenant: TenantContext) {
+  async listPatients(
+    @Req() req: any,
+    @CurrentTenant() tenant: TenantContext,
+    @Query('search') search?: string,
+  ) {
     this.requireRole(req.user.role, UserRole.ADMIN);
-    return this.consultations.listPatientOptions(req.user.id, tenant);
+    return this.consultations.listPatientOptions(req.user.id, tenant, search);
   }
 
   @Get('lookups/nurses')

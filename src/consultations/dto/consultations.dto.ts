@@ -1,4 +1,4 @@
-import { ConsultationMode, SessionStatus, SessionType } from '@prisma/client';
+import { ConsultationMode, ServiceType, SessionStatus, SessionType } from '@prisma/client';
 import {
   IsEnum,
   IsIn,
@@ -46,6 +46,22 @@ export class CreateConsultationSessionDto {
     message: 'scheduledEndTime harus format HH:mm',
   })
   scheduledEndTime?: string;
+
+  @IsOptional()
+  @IsEnum(ServiceType)
+  serviceType?: ServiceType;
+
+  @IsOptional()
+  @IsString()
+  reasonForVisit?: string;
+
+  @IsOptional()
+  @IsString()
+  patientInstructions?: string;
+
+  @IsOptional()
+  @IsString()
+  internalNotes?: string;
 }
 
 export class RescheduleConsultationSessionDto {

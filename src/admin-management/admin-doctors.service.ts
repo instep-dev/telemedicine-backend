@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from 'prisma/prisma.service';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomBytes } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { writeAuditLog } from './audit.helper';
 import type { CreateDoctorDto, ListDoctorsQueryDto, UpdateDoctorDto } from './dto/admin-doctors.dto';
@@ -82,6 +82,14 @@ export class AdminDoctorsService {
       const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 12);
       const userId = randomUUID();
 
+      // Generate unique Twilio identity for doctor
+      let twilioIdentity: string | null = null;
+      for (let i = 0; i < 5; i++) {
+        const candidate = `doc_${randomBytes(10).toString('hex')}`;
+        const exists = await tx.user.findFirst({ where: { twilioIdentity: candidate }, select: { id: true } });
+        if (!exists) { twilioIdentity = candidate; break; }
+      }
+
       await tx.user.create({
         data: {
           id: userId,
@@ -90,6 +98,7 @@ export class AdminDoctorsService {
           name: dto.fullName.trim(),
           isActive: true,
           emailVerifiedAt: new Date(),
+          twilioIdentity,
           doctorProfile: {
             create: {
               tenantId,

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { TwilioService } from './twilio.service';
 import { TwilioController } from './twilio.controller';
 import { PrismaService } from 'prisma/prisma.service';
