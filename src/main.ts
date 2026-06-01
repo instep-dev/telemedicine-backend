@@ -12,7 +12,28 @@ process.on('uncaughtException', (err) => {
   console.error('[uncaughtException]', err);
 });
 
+const REQUIRED_ENV_VARS = [
+  'DATABASE_URL',
+  'JWT_ACCESS_SECRET',
+  'JWT_SUPER_ADMIN_ACCESS_SECRET',
+  'TWILIO_ACCOUNT_SID',
+  'TWILIO_API_KEY_SID',
+  'TWILIO_API_KEY_SECRET',
+];
+
+function validateEnv() {
+  const missing = REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
+  if (missing.length > 0) {
+    console.error('\n❌ Missing required environment variables:');
+    missing.forEach((key) => console.error(`   • ${key}`));
+    console.error('\nSet these in your Railway / deployment environment and restart.\n');
+    process.exit(1);
+  }
+}
+
 async function bootstrap() {
+  validateEnv();
+
   const app = await NestFactory.create(AppModule);
 
   // Trust reverse-proxy headers (Railway, Render, etc.) so req.ip is the real client IP.
