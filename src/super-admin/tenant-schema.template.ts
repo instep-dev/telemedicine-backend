@@ -16,6 +16,7 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE TYPE "${s}"."ConsultationMode" AS ENUM ('VIDEO', 'VOICE')`,
     `CREATE TYPE "${s}"."SessionStatus" AS ENUM ('CREATED', 'IN_CALL', 'COMPLETED', 'FAILED')`,
     `CREATE TYPE "${s}"."AuthAction" AS ENUM ('REGISTER', 'LOGIN', 'LOGOUT', 'REFRESH', 'TOKEN_REVOKE')`,
+    `CREATE TYPE "${s}"."ServiceType" AS ENUM ('TELEMEDICINE', 'TELECOUNSELLING')`,
 
     // ── User ──────────────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."User" (
@@ -258,6 +259,11 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
       "doctor_id"               TEXT         NOT NULL,
       "session_type"            "${s}"."SessionType"      NOT NULL,
       "consultation_mode"       "${s}"."ConsultationMode" NOT NULL,
+      "service_type"            "${s}"."ServiceType"      NOT NULL DEFAULT 'TELEMEDICINE',
+      "reason_for_visit"        TEXT,
+      "patient_instructions"    TEXT,
+      "internal_notes"          TEXT,
+      "check_in_name"           TEXT,
       "scheduled_date"          DATE         NOT NULL,
       "scheduled_start_time"    TIMESTAMP(3) NOT NULL,
       "duration_minutes"        INTEGER,
@@ -375,6 +381,23 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE INDEX "CSA_session_idx"  ON "${s}"."ConsultationSessionAudit"("consultation_session_id")`,
     `CREATE INDEX "CSA_actor_idx"    ON "${s}"."ConsultationSessionAudit"("actor_user_id")`,
     `CREATE INDEX "CSA_created_idx"  ON "${s}"."ConsultationSessionAudit"("created_at")`,
+
+    // ── PatientReview ─────────────────────────────────────────────────────────
+    `CREATE TABLE "${s}"."PatientReview" (
+      "id"         TEXT         PRIMARY KEY,
+      "tenantId"   TEXT         NOT NULL,
+      "session_id" TEXT         NOT NULL,
+      "patient_id" TEXT         NOT NULL,
+      "rating"     INTEGER      NOT NULL CHECK ("rating" BETWEEN 1 AND 5),
+      "note"       TEXT,
+      "createdAt"  TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "PR_session_fkey" FOREIGN KEY ("session_id") REFERENCES "${s}"."ConsultationSession"("session_id") ON DELETE CASCADE,
+      CONSTRAINT "PR_patient_fkey" FOREIGN KEY ("patient_id") REFERENCES "${s}"."User"("id") ON DELETE CASCADE
+    )`,
+    `CREATE UNIQUE INDEX "PR_session_key"     ON "${s}"."PatientReview"("session_id")`,
+    `CREATE INDEX "PR_tenantId_idx"           ON "${s}"."PatientReview"("tenantId")`,
+    `CREATE INDEX "PR_patient_id_idx"         ON "${s}"."PatientReview"("patient_id")`,
+    `CREATE INDEX "PR_rating_idx"             ON "${s}"."PatientReview"("rating")`,
 
     // ── AuditLog ──────────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."AuditLog" (

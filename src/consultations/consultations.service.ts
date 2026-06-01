@@ -418,6 +418,7 @@ export class ConsultationsService {
           nurseId: nurseUserId,
           sessionType: dto.sessionType,
           consultationMode: dto.consultationMode,
+          serviceType: dto.serviceType ?? 'TELEMEDICINE',
           scheduledDate,
           scheduledStartTime,
           scheduledEndTime,
@@ -425,6 +426,9 @@ export class ConsultationsService {
           createdBy: admin.id,
           roomName,
           recordingEnabled: dto.consultationMode === ConsultationMode.VIDEO,
+          reasonForVisit: dto.reasonForVisit ?? null,
+          patientInstructions: dto.patientInstructions ?? null,
+          internalNotes: dto.internalNotes ?? null,
         },
         include: sessionWithProfilesInclude,
       });
@@ -814,19 +818,35 @@ export class ConsultationsService {
     });
   }
 
-  async listPatientOptions(adminId: string, tenant: TenantContext) {
+  async listPatientOptions(adminId: string, tenant: TenantContext, search?: string) {
     return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       const admin = await tx.user.findUnique({ where: { id: adminId }, select: { id: true, role: true } });
       if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
       this.assertRole(admin.role, UserRole.ADMIN);
 
+      const searchFilter = search?.trim()
+        ? {
+            OR: [
+              { fullName: { contains: search.trim(), mode: 'insensitive' as const } },
+              { mrn: { contains: search.trim(), mode: 'insensitive' as const } },
+            ],
+          }
+        : {};
+
       const rows = await tx.patientProfile.findMany({
-        where: { user: { isActive: true, role: UserRole.PATIENT } },
-        select: { userId: true, fullName: true, email: true, phone: true },
+        where: { user: { isActive: true, role: UserRole.PATIENT }, ...searchFilter },
+        select: { userId: true, fullName: true, email: true, phone: true, mrn: true },
         orderBy: { fullName: 'asc' },
+        take: 50,
       });
 
-      return rows.map((item) => ({ userId: item.userId, fullName: item.fullName, email: item.email, phone: item.phone }));
+      return rows.map((item) => ({
+        userId: item.userId,
+        fullName: item.fullName,
+        email: item.email,
+        phone: item.phone,
+        mrn: item.mrn,
+      }));
     });
   }
 }

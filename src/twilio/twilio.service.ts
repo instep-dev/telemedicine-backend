@@ -16,6 +16,7 @@ import {
   UserRole,
 } from '@prisma/client';
 import { randomUUID } from 'crypto';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { AiService } from 'src/ai-summary/ai.service';
 import { LocalStorageService } from 'src/video/local-storage.service';
 import { PrismaService } from 'prisma/prisma.service';
@@ -63,6 +64,7 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     private readonly aiService: AiService,
     private readonly videoCallService: VideoCallService,
     private readonly voiceCallService: VoiceCallService,
+    private readonly eventEmitter: EventEmitter2,
   ) {}
 
   onModuleInit() {
@@ -550,6 +552,9 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       metadata: { consultationMode: session.consultationMode, rejoin: isRejoin },
     });
 
+    // Broadcast SSE to patient waiting room
+    this.eventEmitter.emit('session.doctor_joined', { sessionId: session.sessionId });
+
     const provider = this.getProvider(session.consultationMode);
     const ttl = this.calculateTokenTtl(session);
     const token = provider.generateToken(identity, session.roomName, ttl);
@@ -847,6 +852,57 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     });
 
     return composition;
+  }
+
+  async publicPatientToken(
+    session: any,
+    tenant: { id: string; slug: string; schemaName: string },
+    identity: string,
+    displayName: string,
+  ) {
+    await this.ensureRoom(session, tenant);
+
+    const now = new Date();
+    const isRejoin = !!session.patientJoinedAt;
+    const startedAt = !session.startedAt && session.doctorJoinedAt ? now : session.startedAt;
+
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      await tx.consultationSession.update({
+        where: { sessionId: session.sessionId },
+        data: {
+          patientIdentity: identity,
+          patientName: displayName,
+          patientJoinedAt: session.patientJoinedAt ?? now,
+          sessionStatus: 'IN_CALL',
+          startedAt: startedAt ?? undefined,
+        },
+      });
+    });
+
+    const provider = this.getProvider(session.consultationMode);
+    const ttl = this.calculateTokenTtl(session);
+    const token = provider.generateToken(identity, session.roomName, ttl);
+
+    const participantNames: Record<string, string> = {};
+    if (session.doctor?.twilioIdentity) {
+      participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Dokter';
+    }
+    participantNames[identity] = displayName;
+    if (session.nurseId) {
+      const nurseIdentity = `nurse_${session.sessionId}_${session.nurseId.slice(0, 8)}`;
+      participantNames[nurseIdentity] = session.nurse?.name ?? 'Perawat';
+    }
+
+    return {
+      token,
+      roomName: session.roomName,
+      identity,
+      sessionId: session.sessionId,
+      consultationMode: session.consultationMode,
+      sessionType: session.sessionType,
+      tokenTtlSec: ttl,
+      participantNames,
+    };
   }
 
   async getCompositionMediaUrl(compositionSid: string, ttl = 3600) {

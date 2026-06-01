@@ -22,6 +22,7 @@ import { TenantModule } from "./tenant/tenant.module";
 import { TenantMiddleware } from "./tenant/tenant.middleware";
 import { SuperAdminModule } from "./super-admin/super-admin.module";
 import { AdminManagementModule } from "./admin-management/admin-management.module";
+import { JoinModule } from "./join/join.module";
 
 const uploadsDir = join(process.cwd(), "uploads", "profiles");
 
@@ -66,6 +67,7 @@ if (!existsSync(uploadsDir)) {
     CallModule,
     AiResultsModule,
     SoapNotesModule,
+    JoinModule,
   ],
   providers: [
     {

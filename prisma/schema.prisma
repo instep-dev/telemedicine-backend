@@ -309,6 +309,12 @@ model ConsultationSession {
 
   sessionType      SessionType      @map("session_type")
   consultationMode ConsultationMode @map("consultation_mode")
+  serviceType      ServiceType      @default(TELEMEDICINE) @map("service_type")
+
+  reasonForVisit      String? @map("reason_for_visit")
+  patientInstructions String? @map("patient_instructions")
+  internalNotes       String? @map("internal_notes")
+  checkInName         String? @map("check_in_name")
 
   scheduledDate      DateTime  @db.Date @map("scheduled_date")
   scheduledStartTime DateTime  @map("scheduled_start_time")
@@ -582,6 +588,11 @@ model PendingRegistration {
 enum SessionType {
   SCHEDULED
   INSTANT
+}
+
+enum ServiceType {
+  TELEMEDICINE
+  TELECOUNSELLING
 }
 
 enum ConsultationMode {
