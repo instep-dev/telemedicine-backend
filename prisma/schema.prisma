@@ -484,6 +484,19 @@ model AuditLog {
 // ─── Public schema models (ephemeral / global) ────────────────────────────────
 // These stay in default search_path (public). No withTenantSchema needed.
 
+model PromptSetting {
+  id           String   @id @default(uuid())
+  templateType String   @unique
+  subjective   String
+  objective    String
+  assessment   String
+  plan         String
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@map("prompt_settings")
+}
+
 model SuperAdmin {
   id            String                   @id @default(uuid())
   email         String                   @unique

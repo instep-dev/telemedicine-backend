@@ -1,16 +1,18 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
--- CLEAN SLATE SCRIPT v2 — Database kosong total + SuperAdmin seed
+-- CLEAN SLATE SCRIPT v3 — Database kosong total + SuperAdmin seed
 -- Paste ke Neon SQL Editor → Run
 --
 -- Yang dilakukan script ini:
 --   1. Drop semua tenant schema + public tables + enums
---   2. Rebuild public schema (SuperAdmin, tenant_registry, OAuth, PendingRegistration)
+--   2. Rebuild public schema (SuperAdmin, tenant_registry, OAuth, PendingRegistration,
+--      prompt_settings)
 --   3. Seed SuperAdmin: it.development@instep.id / password123!
 --
 -- Setelah script ini selesai:
 --   - Login ke super-admin panel
 --   - Tambah tenant → schema tenant dibuat otomatis oleh app
 --   - Schema tenant sudah include semua fitur terbaru (ServiceType, dll)
+--   - Prompt settings (SOAP/DAP) di-seed otomatis oleh backend saat pertama diakses
 -- ═══════════════════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -47,6 +49,7 @@ DROP TABLE IF EXISTS public."OAuthState"               CASCADE;
 DROP TABLE IF EXISTS public."OAuthPending"             CASCADE;
 DROP TABLE IF EXISTS public."PendingRegistration"      CASCADE;
 DROP TABLE IF EXISTS public.tenant_registry            CASCADE;
+DROP TABLE IF EXISTS public.prompt_settings            CASCADE;
 
 DROP TYPE IF EXISTS public."UserRole"         CASCADE;
 DROP TYPE IF EXISTS public."OAuthProvider"    CASCADE;
@@ -161,6 +164,18 @@ CREATE INDEX "PendingRegistration_email_idx"      ON public."PendingRegistration
 CREATE INDEX "PendingRegistration_phone_idx"      ON public."PendingRegistration"("phone");
 CREATE INDEX "PendingRegistration_expiresAt_idx"  ON public."PendingRegistration"("expiresAt");
 
+CREATE TABLE public.prompt_settings (
+  id              TEXT         PRIMARY KEY,
+  "templateType"  TEXT         NOT NULL,
+  subjective      TEXT         NOT NULL,
+  objective       TEXT         NOT NULL DEFAULT '',
+  assessment      TEXT         NOT NULL,
+  plan            TEXT         NOT NULL,
+  created_at      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE UNIQUE INDEX prompt_settings_template_type_key ON public.prompt_settings ("templateType");
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- PHASE 4: SEED SUPER ADMIN
 -- email    : it.development@instep.id
@@ -184,11 +199,12 @@ SET search_path TO public;
 
 DO $$
 BEGIN
-  RAISE NOTICE '=== CLEAN SLATE v2 SELESAI ===';
+  RAISE NOTICE '=== CLEAN SLATE v3 SELESAI ===';
   RAISE NOTICE 'SuperAdmin: it.development@instep.id / password123!';
   RAISE NOTICE 'Langkah selanjutnya:';
   RAISE NOTICE '  1. Deploy backend terbaru ke Railway';
   RAISE NOTICE '  2. Login super-admin panel';
   RAISE NOTICE '  3. Tambah tenant → schema otomatis dibuat dengan fitur terbaru';
-  RAISE NOTICE 'Fitur baru di tenant schema: ServiceType, reasonForVisit, patientInstructions, internalNotes, checkInName';
+  RAISE NOTICE '  4. Buka /prompt-setting → SOAP & DAP di-seed otomatis saat pertama diakses';
+  RAISE NOTICE 'Fitur baru: prompt_settings table (SOAP/DAP AI template per super-admin), ServiceType routing';
 END $$;

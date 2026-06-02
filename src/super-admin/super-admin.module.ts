@@ -10,6 +10,8 @@ import { SuperAdminUsersController } from './super-admin-users.controller';
 import { SuperAdminUsersService } from './super-admin-users.service';
 import { SuperAdminDashboardController } from './super-admin-dashboard.controller';
 import { SuperAdminDashboardService } from './super-admin-dashboard.service';
+import { SuperAdminPromptSettingsController } from './super-admin-prompt-settings.controller';
+import { SuperAdminPromptSettingsService } from './super-admin-prompt-settings.service';
 
 @Module({
   imports: [JwtModule.register({}), PrismaModule],
@@ -18,6 +20,7 @@ import { SuperAdminDashboardService } from './super-admin-dashboard.service';
     SuperAdminTenantsController,
     SuperAdminUsersController,
     SuperAdminDashboardController,
+    SuperAdminPromptSettingsController,
   ],
   providers: [
     SuperAdminAuthService,
@@ -25,6 +28,7 @@ import { SuperAdminDashboardService } from './super-admin-dashboard.service';
     SuperAdminUsersService,
     SuperAdminDashboardService,
     SuperAdminJwtStrategy,
+    SuperAdminPromptSettingsService,
   ],
 })
 export class SuperAdminModule {}

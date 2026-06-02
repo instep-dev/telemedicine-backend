@@ -9,6 +9,14 @@ export interface SoapSummaryResult {
   plan: string;
 }
 
+export interface PromptConfig {
+  templateType: 'SOAP' | 'DAP';
+  subjective: string;
+  objective: string;
+  assessment: string;
+  plan: string;
+}
+
 @Injectable()
 export class SummaryService {
   private readonly logger = new Logger(SummaryService.name);
@@ -25,7 +33,7 @@ export class SummaryService {
     this.ai = new GoogleGenAI({ apiKey });
   }
 
-  async createMedicalSummary(transcript: string): Promise<SoapSummaryResult> {
+  async createMedicalSummary(transcript: string, config?: PromptConfig): Promise<SoapSummaryResult> {
     const cleanTranscript = this.normalizeTranscript(transcript);
 
     if (!cleanTranscript) {
@@ -38,7 +46,7 @@ export class SummaryService {
       };
     }
 
-    const prompt = this.buildPrompt(cleanTranscript);
+    const prompt = this.buildPrompt(cleanTranscript, config);
 
     try {
       const response = await this.withRetry(() => this.ai.models.generateContent({
@@ -140,127 +148,157 @@ export class SummaryService {
     throw lastError;
   }
 
-  private buildPrompt(transcript: string): string {
-      return `
-  You are a careful medical scribe assistant for telemedicine consultations.
+  private buildPrompt(transcript: string, config?: PromptConfig): string {
+    const isDAP = config?.templateType === 'DAP';
 
-  Tugas utama:
-  Analisis transkrip konsultasi dokter-pasien berikut dan hasilkan output SOAP dalam format JSON yang valid.
+    const subjective = config?.subjective ?? `Gunakan format SOAP standar untuk S (Subjective), yang berisi informasi dari perspektif pasien:
+- keluhan utama
+- riwayat keluhan
+- durasi
+- faktor pencetus/pereda
+- riwayat penyakit sebelumnya
+- alergi
+- obat yang sedang dikonsumsi
+- informasi tambahan dari pasien
 
-  Struktur yang wajib dihasilkan:
+Tampilkan Subjective SELALU dalam format berikut:
+Keluhan utama:
+Riwayat keluhan:
+Durasi:
+Faktor pencetus/pereda:
+Riwayat penyakit sebelumnya:
+Alergi:
+Obat yang sedang dikonsumsi:
+Informasi tambahan dari pasien:
 
-  1. summary
-  Ringkasan medis singkat, klinis, padat, dan relevan dari hasil konsultasi.
+Jika ada data yang tidak disebutkan, tulis:
+"Tidak disebutkan dalam transkrip."`;
 
-  2. subjective
-  Gunakan format SOAP standar untuk S (Subjective), yang berisi informasi dari perspektif pasien:
-  - keluhan utama
-  - riwayat keluhan
-  - durasi
-  - faktor pencetus/pereda
-  - riwayat penyakit sebelumnya
-  - alergi
-  - obat yang sedang dikonsumsi
-  - informasi tambahan dari pasien
+    const objective = config?.objective ?? `Gunakan format SOAP standar untuk O (Objective), berisi temuan objektif:
+- tanda vital
+- pemeriksaan fisik
+- hasil lab/radiologi
+- observasi lainnya
 
-  Tampilkan Subjective SELALU dalam format berikut:
-  Keluhan utama:
-  Riwayat keluhan:
-  Durasi:
-  Faktor pencetus/pereda:
-  Riwayat penyakit sebelumnya:
-  Alergi:
-  Obat yang sedang dikonsumsi:
-  Informasi tambahan dari pasien:
+Tampilkan Objective SELALU dalam format berikut:
+Tanda vital:
+Pemeriksaan fisik:
+Hasil lab/radiologi:
+Observasi lainnya:
 
-  Jika ada data yang tidak disebutkan, tulis:
-  "Tidak disebutkan dalam transkrip."
+Jika data objektif tidak tersedia, tulis dengan jelas:
+"Belum ada data objektif yang disampaikan."`;
 
-  3. objective
-  Gunakan format SOAP standar untuk O (Objective), berisi temuan objektif:
-  - tanda vital
-  - pemeriksaan fisik
-  - hasil lab/radiologi
-  - observasi lainnya
+    const assessment = config?.assessment ?? `Gunakan format berikut untuk Assessment:
+Diagnosis kerja:
+1.
+2.
 
-  Tampilkan Objective SELALU dalam format berikut:
-  Tanda vital:
-  Pemeriksaan fisik:
-  Hasil lab/radiologi:
-  Observasi lainnya:
+Diagnosis banding:
+1.
+2.
 
-  Jika data objektif tidak tersedia, tulis dengan jelas:
-  "Belum ada data objektif yang disampaikan."
+ICD-9:
+ICD-10:
+SNOMED:`;
 
-  4. assessment
-  Gunakan format berikut untuk Assessment:
-  Diagnosis kerja:
-  1.
-  2.
+    const plan = config?.plan ?? `Gunakan format SOAP standar untuk P (Plan), berisi rencana tindakan non-preskriptif kecuali dokter memang secara eksplisit memberikan instruksi.
 
-  Diagnosis banding:
-  1.
-  2.
+Tampilkan Plan SELALU dalam format berikut:
+Rencana pemeriksaan lanjutan:
+Edukasi kepada pasien:
+Rekomendasi gaya hidup:
+Tindak lanjut/Follow-up:
+Rencana rawat jalan, rawat inap, atau tindakan:
+Konsultasi kebidang lain jika ada:
+Terapi obat yang diberikan:`;
 
-  ICD-9:
-  ICD-10:
-  SNOMED:
+    const summaryInstruction = isDAP
+      ? 'Ringkasan singkat dan klinis dari sesi konseling yang telah berlangsung, mencakup tema utama dan perkembangan klien.'
+      : 'Ringkasan medis singkat, klinis, padat, dan relevan dari hasil konsultasi.';
 
-  Aturan assessment:
-  - Buat maksimal dua diagnosis kerja jika memang didukung transkrip.
-  - Buat minimal dua diagnosis banding jika memang masuk akal berdasarkan transkrip.
-  - Jangan mengarang diagnosis yang tidak didukung data.
-  - Jika data tidak cukup, nyatakan dengan jelas bahwa assessment terbatas oleh transkrip.
-  - Jika kode ICD-9, ICD-10, atau SNOMED tidak dapat ditentukan dengan yakin dari data yang tersedia, tulis:
+    const objectiveSection = isDAP ? '' : `
+
+3. objective
+${objective}`;
+
+    const sectionOffset = isDAP ? 2 : 3;
+
+    const assessmentRules = isDAP
+      ? `Aturan assessment:
+- Buat formulasi klinis berdasarkan data yang dikumpulkan selama sesi.
+- Jangan mengarang diagnosis yang tidak didukung data.
+- Jika data tidak cukup, nyatakan dengan jelas bahwa assessment terbatas oleh transkrip.`
+      : `Aturan assessment:
+- Buat maksimal dua diagnosis kerja jika memang didukung transkrip.
+- Buat minimal dua diagnosis banding jika memang masuk akal berdasarkan transkrip.
+- Jangan mengarang diagnosis yang tidak didukung data.
+- Jika data tidak cukup, nyatakan dengan jelas bahwa assessment terbatas oleh transkrip.
+- Jika kode ICD-9, ICD-10, atau SNOMED tidak dapat ditentukan dengan yakin dari data yang tersedia, tulis:
   "Tidak dapat ditentukan secara pasti dari transkrip."
 
-  Jika pasien adalah ibu hamil, gunakan format tambahan:
-  Gravida Partus Abortus:
-  Usia kehamilan:
-  Janin tunggal/multiple:
-  Janin hidup intra/extra uterin:
-  Diagnosis patologis:
+Jika pasien adalah ibu hamil, gunakan format tambahan:
+Gravida Partus Abortus:
+Usia kehamilan:
+Janin tunggal/multiple:
+Janin hidup intra/extra uterin:
+Diagnosis patologis:
 
-  Jika konteks kehamilan tidak disebutkan, jangan dipaksakan.
+Jika konteks kehamilan tidak disebutkan, jangan dipaksakan.`;
 
-  5. plan
-  Gunakan format SOAP standar untuk P (Plan), berisi rencana tindakan non-preskriptif kecuali dokter memang secara eksplisit memberikan instruksi.
+    const planRules = isDAP
+      ? `Aturan planning:
+- Fokus pada intervensi konseling dan rencana sesi berikutnya.
+- Jika suatu bagian tidak disebutkan, tulis:
+  "Tidak disebutkan dalam transkrip."`
+      : `Aturan plan:
+- Tidak memberikan resep obat tanpa instruksi eksplisit dari dokter.
+- Jika suatu bagian tidak disebutkan, tulis:
+  "Tidak disebutkan dalam transkrip."`;
 
-  Tampilkan Plan SELALU dalam format berikut:
-  Rencana pemeriksaan lanjutan:
-  Edukasi kepada pasien:
-  Rekomendasi gaya hidup:
-  Tindak lanjut/Follow-up:
-  Rencana rawat jalan, rawat inap, atau tindakan:
-  Konsultasi kebidang lain jika ada:
-  Terapi obat yang diberikan:
+    return `You are a careful ${isDAP ? 'counseling' : 'medical'} scribe assistant for telemedicine consultations.
 
-  Aturan plan:
-  - Tidak memberikan resep obat tanpa instruksi eksplisit dari dokter.
-  - Jika suatu bagian tidak disebutkan, tulis:
-  "Tidak disebutkan dalam transkrip."
+Tugas utama:
+Analisis transkrip konsultasi berikut dan hasilkan output dalam format JSON yang valid.
 
-  Important rules:
-  - Return valid JSON only.
-  - Do not include markdown fences.
-  - Do not invent physical exam, vitals, lab results, or diagnosis if they are not supported by the transcript.
-  - If objective data is missing, state clearly that objective findings were not explicitly mentioned.
-  - If assessment is uncertain, say it is limited by the transcript.
-  - Keep the tone clinical, concise, and useful for a consultation note.
-  - Preserve the original language of the transcript when reasonable. If the transcript is mixed Indonesian-English, output may also be mixed naturally.
+Struktur yang wajib dihasilkan:
 
-  JSON output schema:
-  {
-    "summary": "string",
-    "subjective": "string",
-    "objective": "string",
-    "assessment": "string",
-    "plan": "string"
-  }
+1. summary
+${summaryInstruction}
 
-  Transcript:
-  ${transcript}
-    `.trim();
+2. subjective
+${subjective}${objectiveSection}
+
+${sectionOffset}. assessment
+${assessment}
+
+${assessmentRules}
+
+${sectionOffset + 1}. plan
+${plan}
+
+${planRules}
+
+Important rules:
+- Return valid JSON only.
+- Do not include markdown fences.
+- Do not invent findings or diagnosis if they are not supported by the transcript.
+- If objective data is missing, state clearly that objective findings were not explicitly mentioned.
+- If assessment is uncertain, say it is limited by the transcript.
+- Keep the tone clinical, concise, and useful for a consultation note.
+- Preserve the original language of the transcript when reasonable. If the transcript is mixed Indonesian-English, output may also be mixed naturally.
+
+JSON output schema:
+{
+  "summary": "string",
+  "subjective": "string",
+  "objective": "string",
+  "assessment": "string",
+  "plan": "string"
+}
+
+Transcript:
+${transcript}`.trim();
   }
 
   private normalizeTranscript(text: string): string {

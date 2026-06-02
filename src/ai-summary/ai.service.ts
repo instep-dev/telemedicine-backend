@@ -146,7 +146,17 @@ export class AiService {
         transcribedAt: consultationSession.consultationNote?.transcribedAt ?? new Date(),
       });
 
-      const summary = await this.summaryService.createMedicalSummary(transcriptRaw);
+      const templateType = consultationSession.serviceType === 'TELECOUNSELLING' ? 'DAP' : 'SOAP';
+      const promptSetting = await this.prisma.promptSetting.findUnique({
+        where: { templateType },
+      });
+
+      const summary = await this.summaryService.createMedicalSummary(
+        transcriptRaw,
+        promptSetting
+          ? { templateType, subjective: promptSetting.subjective, objective: promptSetting.objective, assessment: promptSetting.assessment, plan: promptSetting.plan }
+          : undefined,
+      );
 
       const summarizedAt = new Date();
       const transcribedAt =
