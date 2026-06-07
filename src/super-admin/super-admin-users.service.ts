@@ -3,11 +3,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'prisma/prisma.service';
 import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import type { CreateTenantAdminDto } from './dto/create-tenant-admin.dto';
 import type { PlatformUsersQueryDto } from './dto/platform-users-query.dto';
+
+export const USER_LIST_CHANGED_EVENT = 'user.list.changed';
 
 const PAGE_SIZE = 30;
 
@@ -27,7 +30,10 @@ function decodeCursor(cursor: string): CursorPayload | null {
 
 @Injectable()
 export class SuperAdminUsersService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   private async getTenantByIdOrThrow(tenantId: string) {
     const tenant = await this.prisma.tenantRegistry.findUnique({
@@ -147,6 +153,7 @@ export class SuperAdminUsersService {
       if (!user) throw new NotFoundException('User tidak ditemukan');
 
       await tx.user.delete({ where: { id: userId } });
+      this.eventEmitter.emit(USER_LIST_CHANGED_EVENT);
       return { deleted: true, userId };
     });
   }
@@ -187,6 +194,7 @@ export class SuperAdminUsersService {
               where: {
                 tenantId,
                 ...(query.role && { role: query.role as any }),
+                ...(query.isActive !== undefined && { isActive: query.isActive === 'true' }),
                 ...(search && {
                   OR: [
                     { name: { contains: search, mode: 'insensitive' } },
@@ -285,13 +293,6 @@ export class SuperAdminUsersService {
     const { schemaName } = await this.getTenantByIdOrThrow(tenantId);
 
     return this.prisma.withTenantSchema(schemaName, async (tx) => {
-      // Check email uniqueness in this tenant
-      const existingAdmin = await tx.adminProfile.findFirst({
-        where: { email: dto.email, tenantId },
-      });
-      if (existingAdmin) {
-        throw new ConflictException(`Email "${dto.email}" sudah digunakan di tenant ini`);
-      }
 
       const passwordHash = await bcrypt.hash(dto.password, 12);
       const userId = randomUUID();
@@ -318,7 +319,7 @@ export class SuperAdminUsersService {
         },
       });
 
-      return {
+      const result = {
         id: userId,
         name: dto.name.trim(),
         email: dto.email.toLowerCase().trim(),
@@ -327,6 +328,8 @@ export class SuperAdminUsersService {
         role: 'ADMIN',
         createdAt: new Date(),
       };
+      this.eventEmitter.emit(USER_LIST_CHANGED_EVENT);
+      return result;
     });
   }
 }

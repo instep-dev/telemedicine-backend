@@ -1,16 +1,22 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'prisma/prisma.service';
 import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { writeAuditLog } from './audit.helper';
 import type { CreateNurseDto, ListNursesQueryDto, UpdateNurseDto } from './dto/admin-nurses.dto';
 
+export const NURSE_LIST_CHANGED = 'nurse.list.changed';
+
 const PAGE_SIZE = 30;
 const DEFAULT_PASSWORD = 'Password123!';
 
 @Injectable()
 export class AdminNursesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async findAll(tenantId: string, schemaName: string, query: ListNursesQueryDto) {
     return this.prisma.withTenantSchema(schemaName, async (tx) => {
@@ -63,11 +69,28 @@ export class AdminNursesService {
     dto: CreateNurseDto,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
-      const existing = await tx.nurseProfile.findFirst({
-        where: { OR: [{ email: dto.email, tenantId }, { nurseId: dto.nurseId, tenantId }] },
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
+      const nameConflict = await tx.nurseProfile.findFirst({
+        where: { fullName: { equals: dto.fullName.trim(), mode: 'insensitive' }, tenantId },
       });
-      if (existing) throw new ConflictException('Email atau Nomor SIPP sudah terdaftar');
+      if (nameConflict) throw new ConflictException(`Nama "${dto.fullName.trim()}" sudah terdaftar`);
+
+      const emailConflict = await tx.nurseProfile.findFirst({
+        where: { email: dto.email.toLowerCase().trim(), tenantId },
+      });
+      if (emailConflict) throw new ConflictException(`Email "${dto.email}" sudah digunakan`);
+
+      if (dto.phone?.trim()) {
+        const phoneConflict = await tx.nurseProfile.findFirst({
+          where: { phone: dto.phone.trim(), tenantId },
+        });
+        if (phoneConflict) throw new ConflictException(`Nomor telepon "${dto.phone.trim()}" sudah digunakan`);
+      }
+
+      const sippConflict = await tx.nurseProfile.findFirst({
+        where: { nurseId: dto.nurseId.trim(), tenantId },
+      });
+      if (sippConflict) throw new ConflictException(`Nomor SIPP "${dto.nurseId.trim()}" sudah terdaftar`);
 
       const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, 12);
       const userId = randomUUID();
@@ -102,6 +125,8 @@ export class AdminNursesService {
 
       return { userId, message: 'Perawat berhasil didaftarkan' };
     });
+    this.eventEmitter.emit(NURSE_LIST_CHANGED);
+    return result;
   }
 
   async update(
@@ -111,17 +136,27 @@ export class AdminNursesService {
     dto: UpdateNurseDto,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
       const profile = await tx.nurseProfile.findFirst({ where: { userId, tenantId } });
       if (!profile) throw new NotFoundException('Perawat tidak ditemukan');
 
+      if (dto.fullName && dto.fullName.trim().toLowerCase() !== profile.fullName.toLowerCase()) {
+        const conflict = await tx.nurseProfile.findFirst({
+          where: { fullName: { equals: dto.fullName.trim(), mode: 'insensitive' }, tenantId },
+        });
+        if (conflict) throw new ConflictException(`Nama "${dto.fullName.trim()}" sudah terdaftar`);
+      }
       if (dto.email && dto.email !== profile.email) {
         const conflict = await tx.nurseProfile.findFirst({ where: { email: dto.email, tenantId } });
-        if (conflict) throw new ConflictException('Email sudah digunakan');
+        if (conflict) throw new ConflictException(`Email "${dto.email}" sudah digunakan`);
+      }
+      if (dto.phone?.trim() && dto.phone.trim() !== profile.phone) {
+        const conflict = await tx.nurseProfile.findFirst({ where: { phone: dto.phone.trim(), tenantId } });
+        if (conflict) throw new ConflictException(`Nomor telepon "${dto.phone.trim()}" sudah digunakan`);
       }
       if (dto.nurseId && dto.nurseId !== profile.nurseId) {
         const conflict = await tx.nurseProfile.findFirst({ where: { nurseId: dto.nurseId, tenantId } });
-        if (conflict) throw new ConflictException('Nomor SIPP sudah digunakan');
+        if (conflict) throw new ConflictException(`Nomor SIPP "${dto.nurseId.trim()}" sudah terdaftar`);
       }
 
       const updated = await tx.nurseProfile.update({
@@ -146,6 +181,8 @@ export class AdminNursesService {
 
       return updated;
     });
+    this.eventEmitter.emit(NURSE_LIST_CHANGED);
+    return result;
   }
 
   async toggleActive(
@@ -154,7 +191,7 @@ export class AdminNursesService {
     userId: string,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
       const user = await tx.user.findFirst({ where: { id: userId, tenantId, role: 'NURSE' } });
       if (!user) throw new NotFoundException('Perawat tidak ditemukan');
 
@@ -172,5 +209,7 @@ export class AdminNursesService {
 
       return updated;
     });
+    this.eventEmitter.emit(NURSE_LIST_CHANGED);
+    return result;
   }
 }

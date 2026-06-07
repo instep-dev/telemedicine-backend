@@ -71,8 +71,6 @@ async function main() {
   console.log(`Seeding tenant: ${TENANT_SLUG} (tenant_demo_app)`);
 
   // Public schema tables — raw SQL with explicit schema since adapter is scoped to tenant schema
-  await prisma.$executeRaw`DELETE FROM "public"."OAuthPending" WHERE "tenantSlug" = ${TENANT_SLUG}`;
-  await prisma.$executeRaw`DELETE FROM "public"."OAuthState" WHERE "tenantSlug" = ${TENANT_SLUG}`;
   await prisma.$executeRaw`DELETE FROM "public"."PendingRegistration" WHERE "tenantSlug" = ${TENANT_SLUG}`;
 
   // Tenant schema tables — Prisma model API works because adapter is scoped to tenant_demo_app
@@ -81,7 +79,6 @@ async function main() {
     await tx.consultationNote.deleteMany();
     await tx.consultationSession.deleteMany();
     await tx.authAuditLog.deleteMany();
-    await tx.oauthAccount.deleteMany();
     await tx.pendingEmailChange.deleteMany();
     await tx.pendingPasswordReset.deleteMany();
     await tx.refreshToken.deleteMany();

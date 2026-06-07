@@ -16,8 +16,6 @@ export class TenantMiddleware implements NestMiddleware {
   async use(req: Request, _res: Response, next: NextFunction) {
     const slug = req.headers['x-tenant-slug'];
 
-    // Some routes (e.g. OAuth provider callbacks) don't carry this header.
-    // Those routes resolve the tenant internally from their own state.
     if (!slug || typeof slug !== 'string') {
       (req as any).tenant = null;
       return next();

@@ -1,15 +1,37 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, MessageEvent, Param, Patch, Post, Query, Req, Res, Sse, UseGuards } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
+import { Observable, Subject } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { AdminRoleGuard } from './admin-role.guard';
 import { CurrentTenant } from 'src/tenant/tenant.decorator';
 import type { TenantContext } from 'src/tenant/tenant.interface';
-import { AdminNursesService } from './admin-nurses.service';
+import { AdminNursesService, NURSE_LIST_CHANGED } from './admin-nurses.service';
 import { CreateNurseDto, ListNursesQueryDto, UpdateNurseDto } from './dto/admin-nurses.dto';
 
 @UseGuards(JwtGuard, AdminRoleGuard)
 @Controller('admin/nurses')
 export class AdminNursesController {
+  private readonly listChanged$ = new Subject<void>();
+
   constructor(private readonly service: AdminNursesService) {}
+
+  @Sse('stream')
+  nursesStream(@Req() req: any, @Res() res: any): Observable<MessageEvent> {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    const disconnect$ = new Subject<void>();
+    req.on('close', () => disconnect$.next());
+    return new Observable<MessageEvent>((subscriber) => {
+      subscriber.next({ data: JSON.stringify({ type: 'CONNECTED' }) } as MessageEvent);
+      const sub = this.listChanged$.pipe(takeUntil(disconnect$))
+        .subscribe(() => subscriber.next({ data: JSON.stringify({ type: 'NURSE_LIST_CHANGED' }) } as MessageEvent));
+      return () => { sub.unsubscribe(); disconnect$.next(); };
+    });
+  }
+
+  @OnEvent(NURSE_LIST_CHANGED)
+  handleNurseListChanged() { this.listChanged$.next(); }
 
   @Get()
   findAll(@CurrentTenant() tenant: TenantContext, @Query() query: ListNursesQueryDto) {

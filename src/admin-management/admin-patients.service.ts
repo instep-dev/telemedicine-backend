@@ -1,9 +1,12 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { PrismaService } from 'prisma/prisma.service';
 import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { writeAuditLog } from './audit.helper';
 import type { CreatePatientDto, ListPatientsQueryDto, UpdatePatientDto } from './dto/admin-patients.dto';
+
+export const PATIENT_LIST_CHANGED = 'patient.list.changed';
 
 const PAGE_SIZE = 30;
 const DEFAULT_PASSWORD = 'Password123!';
@@ -14,7 +17,10 @@ function generateMrn(year: number, sequence: number): string {
 
 @Injectable()
 export class AdminPatientsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   async findAll(tenantId: string, schemaName: string, query: ListPatientsQueryDto) {
     return this.prisma.withTenantSchema(schemaName, async (tx) => {
@@ -70,16 +76,19 @@ export class AdminPatientsService {
     dto: CreatePatientDto,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
-      // Check email uniqueness only if provided
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
+      const nameConflict = await tx.patientProfile.findFirst({
+        where: { fullName: { equals: dto.fullName.trim(), mode: 'insensitive' }, tenantId },
+      });
+      if (nameConflict) throw new ConflictException(`Nama "${dto.fullName.trim()}" sudah terdaftar`);
+
       if (dto.email) {
-        const conflict = await tx.patientProfile.findFirst({ where: { email: dto.email, tenantId } });
-        if (conflict) throw new ConflictException('Email sudah terdaftar di tenant ini');
+        const conflict = await tx.patientProfile.findFirst({ where: { email: dto.email.toLowerCase().trim(), tenantId } });
+        if (conflict) throw new ConflictException(`Email "${dto.email}" sudah digunakan`);
       }
 
-      // Check phone uniqueness
-      const phoneConflict = await tx.patientProfile.findFirst({ where: { phone: dto.phone, tenantId } });
-      if (phoneConflict) throw new ConflictException('Nomor telepon sudah terdaftar');
+      const phoneConflict = await tx.patientProfile.findFirst({ where: { phone: dto.phone.trim(), tenantId } });
+      if (phoneConflict) throw new ConflictException(`Nomor telepon "${dto.phone.trim()}" sudah digunakan`);
 
       // Handle MRN
       let mrn = dto.mrn?.trim() || null;
@@ -131,6 +140,8 @@ export class AdminPatientsService {
 
       return { userId, mrn, message: 'Pasien berhasil didaftarkan' };
     });
+    this.eventEmitter.emit(PATIENT_LIST_CHANGED);
+    return result;
   }
 
   async update(
@@ -140,13 +151,20 @@ export class AdminPatientsService {
     dto: UpdatePatientDto,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
       const profile = await tx.patientProfile.findFirst({ where: { userId, tenantId } });
       if (!profile) throw new NotFoundException('Pasien tidak ditemukan');
 
-      if (dto.phone && dto.phone !== profile.phone) {
-        const conflict = await tx.patientProfile.findFirst({ where: { phone: dto.phone, tenantId } });
-        if (conflict) throw new ConflictException('Nomor telepon sudah digunakan');
+      if (dto.fullName && dto.fullName.trim().toLowerCase() !== profile.fullName.toLowerCase()) {
+        const conflict = await tx.patientProfile.findFirst({
+          where: { fullName: { equals: dto.fullName.trim(), mode: 'insensitive' }, tenantId },
+        });
+        if (conflict) throw new ConflictException(`Nama "${dto.fullName.trim()}" sudah terdaftar`);
+      }
+
+      if (dto.phone && dto.phone.trim() !== profile.phone) {
+        const conflict = await tx.patientProfile.findFirst({ where: { phone: dto.phone.trim(), tenantId } });
+        if (conflict) throw new ConflictException(`Nomor telepon "${dto.phone.trim()}" sudah digunakan`);
       }
 
       const updated = await tx.patientProfile.update({
@@ -171,6 +189,8 @@ export class AdminPatientsService {
 
       return updated;
     });
+    this.eventEmitter.emit(PATIENT_LIST_CHANGED);
+    return result;
   }
 
   async toggleActive(
@@ -179,7 +199,7 @@ export class AdminPatientsService {
     userId: string,
     actor: { id: string; name: string; role: string },
   ) {
-    return this.prisma.withTenantSchema(schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(schemaName, async (tx) => {
       const user = await tx.user.findFirst({ where: { id: userId, tenantId, role: 'PATIENT' } });
       if (!user) throw new NotFoundException('Pasien tidak ditemukan');
 
@@ -197,5 +217,7 @@ export class AdminPatientsService {
 
       return updated;
     });
+    this.eventEmitter.emit(PATIENT_LIST_CHANGED);
+    return result;
   }
 }

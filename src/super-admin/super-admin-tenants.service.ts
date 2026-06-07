@@ -12,6 +12,7 @@ import type { CreateTenantDto } from './dto/create-tenant.dto';
 import type { UpdateTenantDto } from './dto/update-tenant.dto';
 
 export const TENANT_STATUS_CHANGED_EVENT = 'tenant.status.changed';
+export const TENANT_LIST_UPDATED_EVENT   = 'tenant.list.updated';
 
 export interface TenantStatusChangedPayload {
   id: string;
@@ -27,9 +28,21 @@ export class SuperAdminTenantsService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
-  async findAll() {
+  async findAll(filters?: { status?: string; subscriptionPlan?: string }) {
     return this.prisma.tenantRegistry.findMany({
+      where: {
+        ...(filters?.status        && { status: filters.status }),
+        ...(filters?.subscriptionPlan && { subscriptionPlan: filters.subscriptionPlan as any }),
+      },
       orderBy: { createdAt: 'asc' },
+    });
+  }
+
+  async findRecent(limit = 3) {
+    return this.prisma.tenantRegistry.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: limit,
+      select: { id: true, name: true, slug: true, status: true, createdAt: true },
     });
   }
 
@@ -41,9 +54,15 @@ export class SuperAdminTenantsService {
 
   async create(dto: CreateTenantDto) {
     const slug = dto.slug.toLowerCase().trim();
+    const name = dto.name.trim();
 
-    const existing = await this.prisma.tenantRegistry.findUnique({ where: { slug } });
-    if (existing) throw new ConflictException(`Slug "${slug}" sudah digunakan`);
+    const existingSlug = await this.prisma.tenantRegistry.findUnique({ where: { slug } });
+    if (existingSlug) throw new ConflictException(`Slug "${slug}" sudah digunakan`);
+
+    const existingName = await this.prisma.tenantRegistry.findFirst({
+      where: { name: { equals: name, mode: 'insensitive' } },
+    });
+    if (existingName) throw new ConflictException(`Nama rumah sakit "${name}" sudah digunakan`);
 
     const tenantId = randomUUID();
     const schemaName = `tenant_${slug.replace(/-/g, '_')}`;
@@ -54,7 +73,7 @@ export class SuperAdminTenantsService {
       data: {
         id: tenantId,
         slug,
-        name: dto.name.trim(),
+        name,
         schemaName,
         status: 'active',
         serviceType: dto.serviceType ?? null,
@@ -65,13 +84,14 @@ export class SuperAdminTenantsService {
       },
     });
 
+    this.eventEmitter.emit(TENANT_LIST_UPDATED_EVENT);
     return tenant;
   }
 
   async update(id: string, dto: UpdateTenantDto) {
     await this.findOne(id);
 
-    return this.prisma.tenantRegistry.update({
+    const tenant = await this.prisma.tenantRegistry.update({
       where: { id },
       data: {
         ...(dto.name && { name: dto.name.trim() }),
@@ -83,6 +103,9 @@ export class SuperAdminTenantsService {
         ...(dto.address !== undefined && { address: dto.address }),
       },
     });
+
+    this.eventEmitter.emit(TENANT_LIST_UPDATED_EVENT);
+    return tenant;
   }
 
   async activate(id: string) {

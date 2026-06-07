@@ -3,7 +3,7 @@ import { IsIn, IsOptional, IsString } from 'class-validator';
 export class PlatformUsersQueryDto {
   @IsString()
   @IsOptional()
-  cursor?: string; // base64 encoded {createdAt, userId}
+  cursor?: string;
 
   @IsString()
   @IsOptional()
@@ -16,4 +16,8 @@ export class PlatformUsersQueryDto {
   @IsIn(['ADMIN', 'DOCTOR', 'PATIENT', 'NURSE'])
   @IsOptional()
   role?: string;
+
+  @IsIn(['true', 'false'])
+  @IsOptional()
+  isActive?: string; // 'true' | 'false'
 }

@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import {
   ConsultationMode,
   Prisma,
@@ -13,6 +14,8 @@ import {
 } from '@prisma/client';
 import { PrismaService } from 'prisma/prisma.service';
 import type { TenantContext } from '../tenant/tenant.interface';
+
+export const CONSULTATION_SESSION_CHANGED = 'consultation.session.changed';
 import {
   CreateConsultationSessionDto,
   ListConsultationSessionsQueryDto,
@@ -50,7 +53,10 @@ type SessionWithProfiles = Prisma.ConsultationSessionGetPayload<{
 
 @Injectable()
 export class ConsultationsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly eventEmitter: EventEmitter2,
+  ) {}
 
   // ─── Date helpers ─────────────────────────────────────────────────────────
 
@@ -329,7 +335,7 @@ export class ConsultationsService {
     dto: CreateConsultationSessionDto,
     tenant: TenantContext,
   ) {
-    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       const [admin, doctor, patient] = await Promise.all([
         tx.user.findUnique({ where: { id: adminUserId }, select: { id: true, role: true, isActive: true, tenantId: true } }),
         tx.user.findUnique({ where: { id: dto.doctorId }, select: { id: true, role: true, isActive: true, tenantId: true } }),
@@ -450,6 +456,8 @@ export class ConsultationsService {
 
       return this.mapSession(created);
     });
+    this.eventEmitter.emit(CONSULTATION_SESSION_CHANGED);
+    return result;
   }
 
   async listAdminSessions(adminUserId: string, query: ListConsultationSessionsQueryDto, tenant: TenantContext) {
@@ -696,7 +704,7 @@ export class ConsultationsService {
   }
 
   async cancelByAdmin(adminId: string, sessionId: string, tenant: TenantContext) {
-    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+    await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       const admin = await tx.user.findUnique({ where: { id: adminId }, select: { id: true, role: true } });
       if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
       this.assertRole(admin.role, UserRole.ADMIN);
@@ -712,6 +720,7 @@ export class ConsultationsService {
 
       await tx.consultationSession.delete({ where: { sessionId } });
     });
+    this.eventEmitter.emit(CONSULTATION_SESSION_CHANGED);
   }
 
   async rescheduleByAdmin(
@@ -720,7 +729,7 @@ export class ConsultationsService {
     dto: RescheduleConsultationSessionDto,
     tenant: TenantContext,
   ) {
-    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+    const result = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       const admin = await tx.user.findUnique({ where: { id: adminId }, select: { id: true, role: true } });
       if (!admin) throw new ForbiddenException('Admin tidak ditemukan');
       this.assertRole(admin.role, UserRole.ADMIN);
@@ -784,6 +793,8 @@ export class ConsultationsService {
 
       return this.mapSession(updated);
     });
+    this.eventEmitter.emit(CONSULTATION_SESSION_CHANGED);
+    return result;
   }
 
   async listDoctorOptions(adminId: string, tenant: TenantContext) {

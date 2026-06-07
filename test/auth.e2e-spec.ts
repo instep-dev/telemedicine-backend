@@ -259,17 +259,6 @@ describe('Auth Endpoints (E2E)', () => {
     });
   });
 
-  // ─── GET /auth/oauth/:provider/start ─────────────────────────────────────
-
-  describe('GET /auth/oauth/:provider/start', () => {
-    it('harus menolak provider tidak valid dengan 400', async () => {
-      const res = await withTenant(
-        request(httpServer).get('/auth/oauth/linkedin/start'),
-      ).query({ role: 'PATIENT', redirectUrl: 'http://localhost:3000' });
-      expect([400, 404]).toContain(res.status);
-    });
-  });
-
   // ─── Tenant validation ────────────────────────────────────────────────────
 
   describe('Tenant validation', () => {

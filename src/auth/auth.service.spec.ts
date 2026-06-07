@@ -16,7 +16,7 @@
 
 import crypto from 'crypto';
 import { BadRequestException } from '@nestjs/common';
-import { UserRole, OAuthProvider } from '@prisma/client';
+import { UserRole } from '@prisma/client';
 
 // ─── Pure helpers (direplikasi dari auth.service.ts) ──────────────────────────
 
@@ -69,13 +69,6 @@ function parseRole(raw: string): UserRole {
   if (v === 'PATIENT') return UserRole.PATIENT;
   if (v === 'NURSE') return UserRole.NURSE;
   throw new BadRequestException('Role tidak valid');
-}
-
-function parseProvider(raw: string): OAuthProvider {
-  const v = String(raw || '').trim().toUpperCase();
-  if (v === 'GOOGLE') return OAuthProvider.GOOGLE;
-  if (v === 'MICROSOFT') return OAuthProvider.MICROSOFT;
-  throw new BadRequestException('Provider OAuth tidak valid');
 }
 
 function parseBornDate(raw?: string) {
@@ -197,26 +190,6 @@ describe('Auth: Business Logic Unit Tests', () => {
       expect(() => parseRole('GUEST')).toThrow(BadRequestException);
       expect(() => parseRole('')).toThrow(BadRequestException);
       expect(() => parseRole('RECEPTIONIST')).toThrow(BadRequestException);
-    });
-  });
-
-  // ─── OAuth provider parsing ──────────────────────────────────────────────
-
-  describe('parseProvider', () => {
-    it('harus parse GOOGLE', () => {
-      expect(parseProvider('GOOGLE')).toBe(OAuthProvider.GOOGLE);
-      expect(parseProvider('google')).toBe(OAuthProvider.GOOGLE);
-    });
-
-    it('harus parse MICROSOFT', () => {
-      expect(parseProvider('MICROSOFT')).toBe(OAuthProvider.MICROSOFT);
-      expect(parseProvider('microsoft')).toBe(OAuthProvider.MICROSOFT);
-    });
-
-    it('harus melempar BadRequestException untuk provider tidak valid', () => {
-      expect(() => parseProvider('LINKEDIN')).toThrow(BadRequestException);
-      expect(() => parseProvider('FACEBOOK')).toThrow(BadRequestException);
-      expect(() => parseProvider('')).toThrow(BadRequestException);
     });
   });
 

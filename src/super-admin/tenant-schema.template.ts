@@ -11,7 +11,6 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
 
     // ── Enums ─────────────────────────────────────────────────────────────────
     `CREATE TYPE "${s}"."UserRole" AS ENUM ('DOCTOR', 'ADMIN', 'PATIENT', 'NURSE')`,
-    `CREATE TYPE "${s}"."OAuthProvider" AS ENUM ('GOOGLE', 'MICROSOFT')`,
     `CREATE TYPE "${s}"."SessionType" AS ENUM ('SCHEDULED', 'INSTANT')`,
     `CREATE TYPE "${s}"."ConsultationMode" AS ENUM ('VIDEO', 'VOICE')`,
     `CREATE TYPE "${s}"."SessionStatus" AS ENUM ('CREATED', 'IN_CALL', 'COMPLETED', 'FAILED')`,
@@ -129,21 +128,6 @@ export function getTenantSchemaDDL(schemaName: string): string[] {
     `CREATE INDEX "NurseProfile_tenantId_idx" ON "${s}"."NurseProfile"("tenantId")`,
     `CREATE INDEX "NurseProfile_nurseId_idx"  ON "${s}"."NurseProfile"("nurseId")`,
     `CREATE INDEX "NurseProfile_poli_idx"      ON "${s}"."NurseProfile"("poli")`,
-
-    // ── OAuthAccount ──────────────────────────────────────────────────────────
-    `CREATE TABLE "${s}"."OAuthAccount" (
-      "id"             TEXT         PRIMARY KEY,
-      "tenantId"       TEXT         NOT NULL,
-      "userId"         TEXT         NOT NULL,
-      "provider"       "${s}"."OAuthProvider" NOT NULL,
-      "providerUserId" TEXT         NOT NULL,
-      "email"          TEXT,
-      "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      CONSTRAINT "OAuthAccount_userId_fkey" FOREIGN KEY ("userId") REFERENCES "${s}"."User"("id") ON DELETE CASCADE
-    )`,
-    `CREATE UNIQUE INDEX "OAuthAccount_provider_providerUserId_tenantId_key" ON "${s}"."OAuthAccount"("provider","providerUserId","tenantId")`,
-    `CREATE INDEX "OAuthAccount_tenantId_idx" ON "${s}"."OAuthAccount"("tenantId")`,
-    `CREATE INDEX "OAuthAccount_userId_idx"   ON "${s}"."OAuthAccount"("userId")`,
 
     // ── RefreshToken ──────────────────────────────────────────────────────────
     `CREATE TABLE "${s}"."RefreshToken" (

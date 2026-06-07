@@ -1,5 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
-import { SuperAdminUsersService } from './super-admin-users.service';
+import { Body, Controller, Delete, Get, MessageEvent, Param, Patch, Post, Query, Req, Res, Sse, UseGuards } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
+import { Observable, Subject } from 'rxjs';
+import { map, takeUntil } from 'rxjs/operators';
+import { SuperAdminUsersService, USER_LIST_CHANGED_EVENT } from './super-admin-users.service';
 import { SuperAdminJwtGuard } from './guards/super-admin-jwt.guard';
 import { CreateTenantAdminDto } from './dto/create-tenant-admin.dto';
 import { PlatformUsersQueryDto } from './dto/platform-users-query.dto';
@@ -7,7 +10,40 @@ import { PlatformUsersQueryDto } from './dto/platform-users-query.dto';
 @UseGuards(SuperAdminJwtGuard)
 @Controller('super-admin')
 export class SuperAdminUsersController {
+  private readonly listChanged$ = new Subject<void>();
+
   constructor(private readonly usersService: SuperAdminUsersService) {}
+
+  // SSE: notify clients when user list changes
+  @Sse('users/stream')
+  usersStream(@Req() req: any, @Res() res: any): Observable<MessageEvent> {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+
+    const disconnect$ = new Subject<void>();
+    req.on('close', () => disconnect$.next());
+
+    return new Observable<MessageEvent>((subscriber) => {
+      // Send initial connected event
+      subscriber.next({ data: JSON.stringify({ type: 'CONNECTED' }) } as MessageEvent);
+
+      const sub = this.listChanged$
+        .pipe(takeUntil(disconnect$))
+        .subscribe(() => {
+          subscriber.next({ data: JSON.stringify({ type: 'USER_LIST_CHANGED' }) } as MessageEvent);
+        });
+
+      return () => {
+        sub.unsubscribe();
+        disconnect$.next();
+      };
+    });
+  }
+
+  @OnEvent(USER_LIST_CHANGED_EVENT)
+  handleUserListChanged() {
+    this.listChanged$.next();
+  }
 
   // Platform-wide users (cross-tenant)
   @Get('users')
@@ -45,7 +81,6 @@ export class SuperAdminUsersController {
     return this.usersService.deactivate(tenantId, userId);
   }
 
-  // Create admin account for a tenant
   @Post('tenants/:tenantId/admin')
   createAdmin(
     @Param('tenantId') tenantId: string,
@@ -54,7 +89,6 @@ export class SuperAdminUsersController {
     return this.usersService.createAdminForTenant(tenantId, dto);
   }
 
-  // Hard delete user from a tenant
   @Delete('tenants/:tenantId/users/:userId')
   deleteUser(
     @Param('tenantId') tenantId: string,

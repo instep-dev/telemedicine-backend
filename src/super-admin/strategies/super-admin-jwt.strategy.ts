@@ -8,7 +8,11 @@ import type { SuperAdminJwtPayload } from '../types/super-admin-jwt-payload';
 export class SuperAdminJwtStrategy extends PassportStrategy(Strategy, 'super-admin-jwt') {
   constructor(private readonly prisma: PrismaService) {
     super({
-      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      jwtFromRequest: ExtractJwt.fromExtractors([
+        ExtractJwt.fromAuthHeaderAsBearerToken(),
+        // Fallback: query param ?token= untuk SSE (EventSource tidak support custom headers)
+        (req: any) => req?.query?.token ?? null,
+      ]),
       secretOrKey: process.env.JWT_SUPER_ADMIN_ACCESS_SECRET!,
     });
   }

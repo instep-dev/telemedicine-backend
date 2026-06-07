@@ -26,6 +26,9 @@ import { VideoTranscriptionDto } from './dto/twilio.dto';
 import { VideoCallService } from './videocall.service';
 import { VoiceCallService } from './voicecall.service';
 
+export const CALL_HISTORY_CHANGED = 'call.history.changed';
+export const PATIENT_HISTORY_CHANGED = 'patient.history.changed';
+
 interface TenantRow {
   id: string;
   slug: string;
@@ -377,6 +380,9 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
       1500,
     );
 
+    this.eventEmitter.emit(CALL_HISTORY_CHANGED);
+    this.eventEmitter.emit(PATIENT_HISTORY_CHANGED);
+
     return {
       success: true,
       sessionId: session.sessionId,
@@ -438,6 +444,9 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
         metadata: { auto: isSystem },
       });
     });
+
+    this.eventEmitter.emit(CALL_HISTORY_CHANGED);
+    this.eventEmitter.emit(PATIENT_HISTORY_CHANGED);
   }
 
   async markSessionFailedBySystem(

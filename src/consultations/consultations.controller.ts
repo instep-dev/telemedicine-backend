@@ -6,13 +6,19 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  MessageEvent,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  Res,
+  Sse,
   UseGuards,
 } from '@nestjs/common';
+import { OnEvent } from '@nestjs/event-emitter';
+import { Observable, Subject } from 'rxjs';
+import { takeUntil } from 'rxjs/operators';
 import { UserRole } from '@prisma/client';
 import { JwtGuard } from 'src/auth/guards/jwt.guard';
 import { CurrentTenant } from '../tenant/tenant.decorator';
@@ -22,12 +28,35 @@ import {
   ListConsultationSessionsQueryDto,
   RescheduleConsultationSessionDto,
 } from './dto/consultations.dto';
-import { ConsultationsService } from './consultations.service';
+import { ConsultationsService, CONSULTATION_SESSION_CHANGED } from './consultations.service';
+import { PATIENT_HISTORY_CHANGED } from '../twilio/twilio.service';
 
 @Controller('consultations')
 @UseGuards(JwtGuard)
 export class ConsultationsController {
+  private readonly historyChanged$ = new Subject<void>();
+
   constructor(private readonly consultations: ConsultationsService) {}
+
+  @Sse('sessions/patient/stream')
+  patientHistoryStream(@Req() req: any, @Res() res: any): Observable<MessageEvent> {
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('X-Accel-Buffering', 'no');
+    const disconnect$ = new Subject<void>();
+    req.on('close', () => disconnect$.next());
+    return new Observable<MessageEvent>((subscriber) => {
+      subscriber.next({ data: JSON.stringify({ type: 'CONNECTED' }) } as MessageEvent);
+      const sub = this.historyChanged$.pipe(takeUntil(disconnect$))
+        .subscribe(() => subscriber.next({ data: JSON.stringify({ type: 'PATIENT_HISTORY_CHANGED' }) } as MessageEvent));
+      return () => { sub.unsubscribe(); disconnect$.next(); };
+    });
+  }
+
+  @OnEvent(CONSULTATION_SESSION_CHANGED)
+  handleSessionChanged() { this.historyChanged$.next(); }
+
+  @OnEvent(PATIENT_HISTORY_CHANGED)
+  handlePatientHistoryChanged() { this.historyChanged$.next(); }
 
   private requireRole(actual: UserRole, expected: UserRole) {
     if (actual !== expected) {
