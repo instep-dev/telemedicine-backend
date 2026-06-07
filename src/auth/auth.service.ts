@@ -8,7 +8,7 @@ import {
 import { PrismaService } from "prisma/prisma.service";
 import { JwtService } from "@nestjs/jwt";
 import crypto from "crypto";
-import { AuthAction, OAuthProvider, UserRole } from "@prisma/client";
+import { AuthAction, UserRole } from "@prisma/client";
 import type { Prisma } from "@prisma/client";
 import type { DoctorProfile, PatientProfile, AdminProfile, NurseProfile, User } from "@prisma/client";
 import type { JwtPayload } from "./types/jwt-payload";
@@ -38,7 +38,6 @@ function parseTtlToMs(ttl: string): number {
 
 const PASSWORD_REGEX = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
 const VERIFY_TTL_MINUTES = 30;
-const OAUTH_STATE_TTL_MINUTES = 10;
 
 function randomVerificationCode(length = 6) {
   let code = "";
@@ -91,13 +90,6 @@ type ProfileWithUser =
   | (PatientProfile & { user: User })
   | (NurseProfile & { user: User });
 
-interface TenantRow {
-  id: string;
-  slug: string;
-  schema_name: string;
-  status: string;
-}
-
 // ─── Service ──────────────────────────────────────────────────────────────────
 
 @Injectable()
@@ -107,24 +99,6 @@ export class AuthService {
 
   private accessTtl = process.env.JWT_ACCESS_TTL || "60m";
   private refreshTtl = process.env.JWT_REFRESH_TTL || "30d";
-  private frontendBaseUrl = process.env.APP_PUBLIC_BASE_URL || "http://localhost:3000";
-  private backendBaseUrl = process.env.APP_BASE_URL || "http://localhost:4000";
-
-  // ─── Internal tenant resolution (for OAuth callback) ──────────────────────
-
-  private async resolveTenantBySlug(slug: string): Promise<TenantContext> {
-    const rows = await this.prisma.$queryRaw<TenantRow[]>`
-      SELECT id, slug, schema_name, status
-      FROM public.tenant_registry
-      WHERE slug = ${slug}
-      LIMIT 1
-    `;
-    const row = rows[0];
-    if (!row || row.status !== "active") {
-      throw new BadRequestException("Tenant tidak valid");
-    }
-    return { id: row.id, slug: row.slug, schemaName: row.schema_name };
-  }
 
   // ─── Audit log (writes to tenant schema) ──────────────────────────────────
 
@@ -175,13 +149,6 @@ export class AuthService {
     if (v === "PATIENT") return UserRole.PATIENT;
     if (v === "NURSE") return UserRole.NURSE;
     throw new BadRequestException("Role tidak valid");
-  }
-
-  private parseProvider(raw: string): OAuthProvider {
-    const v = String(raw || "").trim().toUpperCase();
-    if (v === "GOOGLE") return OAuthProvider.GOOGLE;
-    if (v === "MICROSOFT") return OAuthProvider.MICROSOFT;
-    throw new BadRequestException("Provider OAuth tidak valid");
   }
 
   // ─── Profile finders (called inside withTenantSchema) ─────────────────────
@@ -464,83 +431,6 @@ export class AuthService {
     }
   }
 
-  // ─── OAuth provider helpers ────────────────────────────────────────────────
-
-  private getProviderRedirectUri(provider: OAuthProvider) {
-    if (provider === OAuthProvider.GOOGLE) {
-      return (
-        process.env.OAUTH_GOOGLE_REDIRECT_URI ||
-        `${this.backendBaseUrl}/auth/oauth/google/callback`
-      );
-    }
-    return (
-      process.env.OAUTH_MICROSOFT_REDIRECT_URI ||
-      `${this.backendBaseUrl}/auth/oauth/microsoft/callback`
-    );
-  }
-
-  private async fetchGoogleProfile(code: string) {
-    const redirectUri = this.getProviderRedirectUri(OAuthProvider.GOOGLE);
-    const tokenRes = await fetch("https://oauth2.googleapis.com/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: process.env.OAUTH_GOOGLE_CLIENT_ID || "",
-        client_secret: process.env.OAUTH_GOOGLE_CLIENT_SECRET || "",
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }).toString(),
-    });
-
-    const tokenJson = await tokenRes.json();
-    if (!tokenRes.ok) throw new BadRequestException("OAuth Google gagal");
-
-    const userRes = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
-      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-    });
-    const userJson = await userRes.json();
-
-    return {
-      email: userJson.email as string | undefined,
-      name: userJson.name as string | undefined,
-      providerUserId: userJson.sub as string,
-    };
-  }
-
-  private async fetchMicrosoftProfile(code: string) {
-    const redirectUri = this.getProviderRedirectUri(OAuthProvider.MICROSOFT);
-    const tokenRes = await fetch(
-      "https://login.microsoftonline.com/common/oauth2/v2.0/token",
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          code,
-          client_id: process.env.OAUTH_MICROSOFT_CLIENT_ID || "",
-          client_secret: process.env.OAUTH_MICROSOFT_CLIENT_SECRET || "",
-          redirect_uri: redirectUri,
-          grant_type: "authorization_code",
-          scope: "openid email profile",
-        }).toString(),
-      },
-    );
-
-    const tokenJson = await tokenRes.json();
-    if (!tokenRes.ok) throw new BadRequestException("OAuth Microsoft gagal");
-
-    const userRes = await fetch("https://graph.microsoft.com/oidc/userinfo", {
-      headers: { Authorization: `Bearer ${tokenJson.access_token}` },
-    });
-    const userJson = await userRes.json();
-
-    return {
-      email: (userJson.email || userJson.preferred_username) as string | undefined,
-      name: userJson.name as string | undefined,
-      providerUserId: (userJson.sub || userJson.oid) as string,
-    };
-  }
-
   // ─── Public methods ────────────────────────────────────────────────────────
 
   async login(
@@ -584,9 +474,7 @@ export class AuthService {
     }
 
     if (!profile.passwordHash) {
-      throw new UnauthorizedException(
-        "Akun ini menggunakan OAuth. Silakan login via Google/Microsoft",
-      );
+      throw new UnauthorizedException("Email/phone atau password salah");
     }
 
     const ok = await this.verifyPassword(input.password, profile.passwordHash);
@@ -636,322 +524,6 @@ export class AuthService {
         tenantId: tenant.id,
         tenantSlug: tenant.slug,
         twilioIdentity: user.twilioIdentity,
-      },
-    };
-  }
-
-  async getOAuthStartUrl(
-    input: { provider: string; role: string; redirectUrl?: string },
-    tenant: TenantContext,
-  ) {
-    const provider = this.parseProvider(input.provider);
-    const role = this.parseRole(input.role);
-
-    const state = await this.prisma.oauthState.create({
-      data: {
-        tenantSlug: tenant.slug,
-        provider,
-        role,
-        redirectUrl: input.redirectUrl || null,
-        expiresAt: new Date(Date.now() + OAUTH_STATE_TTL_MINUTES * 60_000),
-      },
-    });
-
-    const redirectUri = this.getProviderRedirectUri(provider);
-    if (provider === OAuthProvider.GOOGLE) {
-      const params = new URLSearchParams({
-        client_id: process.env.OAUTH_GOOGLE_CLIENT_ID || "",
-        redirect_uri: redirectUri,
-        response_type: "code",
-        scope: "openid email profile",
-        state: state.id,
-        access_type: "offline",
-        prompt: "consent",
-      });
-      return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-    }
-
-    const params = new URLSearchParams({
-      client_id: process.env.OAUTH_MICROSOFT_CLIENT_ID || "",
-      redirect_uri: redirectUri,
-      response_type: "code",
-      scope: "openid email profile",
-      state: state.id,
-      prompt: "select_account",
-    });
-    return `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?${params.toString()}`;
-  }
-
-  // No tenant param — resolved internally from OauthState (OAuth callback has no X-Tenant-Slug)
-  async handleOAuthCallback(input: {
-    provider: string;
-    query: Record<string, string | undefined>;
-    ip?: string;
-    userAgent?: string;
-  }) {
-    const provider = this.parseProvider(input.provider);
-
-    if (input.query.error) {
-      return {
-        redirectUrl: `${this.frontendBaseUrl}/auth/oauth/success?error=${encodeURIComponent(input.query.error)}`,
-      };
-    }
-
-    const code = input.query.code;
-    const state = input.query.state;
-
-    if (!code || !state) {
-      return { redirectUrl: `${this.frontendBaseUrl}/auth/oauth/success?error=missing_code` };
-    }
-
-    const oauthState = await this.prisma.oauthState.findUnique({ where: { id: state } });
-    if (!oauthState || oauthState.expiresAt.getTime() <= Date.now()) {
-      return { redirectUrl: `${this.frontendBaseUrl}/auth/oauth/success?error=invalid_state` };
-    }
-
-    await this.prisma.oauthState.delete({ where: { id: oauthState.id } });
-
-    // Resolve tenant from state
-    let tenant: TenantContext;
-    try {
-      tenant = await this.resolveTenantBySlug(oauthState.tenantSlug);
-    } catch {
-      return { redirectUrl: `${this.frontendBaseUrl}/auth/oauth/success?error=invalid_tenant` };
-    }
-
-    // Build tenant-specific frontend URL
-    const tenantFrontendUrl = this.frontendBaseUrl.includes("localhost")
-      ? this.frontendBaseUrl
-      : `https://${tenant.slug}.${this.frontendBaseUrl.replace(/^https?:\/\//, "")}`;
-
-    let oauthProfile: { email?: string; name?: string; providerUserId: string };
-    try {
-      oauthProfile =
-        provider === OAuthProvider.GOOGLE
-          ? await this.fetchGoogleProfile(code)
-          : await this.fetchMicrosoftProfile(code);
-    } catch {
-      return { redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?error=oauth_failed` };
-    }
-
-    const email = normalizeEmail(oauthProfile.email || "");
-    if (!email)
-      return { redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?error=missing_email` };
-    if (!oauthProfile.providerUserId)
-      return { redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?error=missing_account` };
-
-    const existingProfile = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) =>
-      this.findProfileByIdentifierInTx(tx, { email }),
-    );
-    const existingUser = existingProfile?.user;
-
-    if (existingUser && existingUser.role !== oauthState.role) {
-      return { redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?error=email_used` };
-    }
-
-    if (existingUser) {
-      if (!existingUser.isActive) {
-        return { redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?error=inactive` };
-      }
-
-      await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
-        await tx.oauthAccount.upsert({
-          where: {
-            provider_providerUserId_tenantId: {
-              provider,
-              providerUserId: oauthProfile.providerUserId,
-              tenantId: tenant.id,
-            },
-          },
-          update: { userId: existingUser.id, email },
-          create: {
-            tenantId: tenant.id,
-            userId: existingUser.id,
-            provider,
-            providerUserId: oauthProfile.providerUserId,
-            email,
-          },
-        });
-      });
-
-      const tokens = await this.issueTokens({
-        userId: existingUser.id,
-        email: existingProfile!.email,
-        role: existingUser.role,
-        tenant,
-        twilioIdentity: existingUser.twilioIdentity,
-        ip: input.ip,
-        userAgent: input.userAgent,
-      });
-
-      await this.audit({
-        tenant,
-        userId: existingUser.id,
-        email: existingProfile!.email,
-        action: AuthAction.LOGIN,
-        success: true,
-        ip: input.ip,
-        userAgent: input.userAgent,
-      });
-
-      return {
-        redirectUrl: `${tenantFrontendUrl}/auth/oauth/success?accessToken=${encodeURIComponent(tokens.accessToken)}`,
-        refreshToken: tokens.refreshToken,
-      };
-    }
-
-    // New user — create OauthPending (public schema)
-    const pending = await this.prisma.oauthPending.upsert({
-      where: {
-        provider_providerUserId_tenantSlug: {
-          provider,
-          providerUserId: oauthProfile.providerUserId,
-          tenantSlug: tenant.slug,
-        },
-      },
-      update: {
-        role: oauthState.role,
-        email,
-        name: oauthProfile.name || null,
-        expiresAt: new Date(Date.now() + VERIFY_TTL_MINUTES * 60_000),
-      },
-      create: {
-        tenantSlug: tenant.slug,
-        provider,
-        role: oauthState.role,
-        providerUserId: oauthProfile.providerUserId,
-        email,
-        name: oauthProfile.name || null,
-        expiresAt: new Date(Date.now() + VERIFY_TTL_MINUTES * 60_000),
-      },
-    });
-
-    return {
-      redirectUrl: `${tenantFrontendUrl}/auth/oauth/complete?token=${pending.id}&role=${pending.role}`,
-    };
-  }
-
-  async completeOAuth(
-    input: {
-      token: string;
-      phone: string;
-      name?: string;
-      license?: string;
-      adminId?: string;
-      nurseId?: string;
-      bornDate?: string;
-      ip?: string;
-      userAgent?: string;
-    },
-    tenant: TenantContext,
-  ) {
-    const pending = await this.prisma.oauthPending.findUnique({ where: { id: input.token } });
-
-    if (!pending) throw new BadRequestException("Token OAuth tidak valid");
-    if (pending.expiresAt.getTime() <= Date.now()) {
-      await this.prisma.oauthPending.delete({ where: { id: pending.id } });
-      throw new BadRequestException("Token OAuth sudah expired");
-    }
-
-    // Verify pending belongs to same tenant
-    if (pending.tenantSlug !== tenant.slug)
-      throw new BadRequestException("Token OAuth tidak valid untuk tenant ini");
-
-    const email = normalizeEmail(pending.email);
-    const phone = normalizePhone(input.phone || "");
-    ensurePhoneDigits(input.phone || "", phone);
-
-    const name = (input.name || pending.name || "").trim();
-    if (!name) throw new BadRequestException("Nama lengkap wajib diisi");
-
-    await this.ensureEmailPhoneAvailable(email, phone, tenant);
-
-    if (pending.role === UserRole.DOCTOR) {
-      const license = (input.license || "").trim();
-      if (!license) throw new BadRequestException("License wajib diisi");
-      await this.ensureLicenseValid(license, tenant);
-    }
-    if (pending.role === UserRole.ADMIN) {
-      const adminId = (input.adminId || "").trim();
-      if (!adminId) throw new BadRequestException("Admin ID wajib diisi");
-      await this.ensureAdminIdValid(adminId, tenant);
-    }
-    if (pending.role === UserRole.NURSE) {
-      const nurseId = (input.nurseId || "").trim();
-      if (!nurseId) throw new BadRequestException("Nurse ID wajib diisi");
-      await this.ensureNurseIdValid(nurseId, tenant);
-    }
-    if (pending.role === UserRole.PATIENT) {
-      const bornDate = parseBornDate(input.bornDate);
-      if (!bornDate) throw new BadRequestException("Tanggal lahir wajib diisi");
-      ensureMinimumAge(bornDate, 17);
-    }
-
-    const created = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
-      const twilioIdentity =
-        pending.role === UserRole.DOCTOR
-          ? await this.generateUniqueTwilioIdentity(tx)
-          : null;
-
-      const u = await tx.user.create({
-        data: {
-          tenantId: tenant.id,
-          role: pending.role,
-          name,
-          emailVerifiedAt: new Date(),
-          isActive: true,
-          twilioIdentity,
-        },
-      });
-
-      if (pending.role === UserRole.DOCTOR)
-        await tx.doctorProfile.create({
-          data: { tenantId: tenant.id, userId: u.id, fullName: name, email, phone, passwordHash: null, license: input.license!.trim() },
-        });
-      if (pending.role === UserRole.ADMIN)
-        await tx.adminProfile.create({
-          data: { tenantId: tenant.id, userId: u.id, fullName: name, email, phone, passwordHash: null, adminId: input.adminId!.trim() },
-        });
-      if (pending.role === UserRole.NURSE)
-        await tx.nurseProfile.create({
-          data: { tenantId: tenant.id, userId: u.id, fullName: name, email, phone, passwordHash: null, nurseId: input.nurseId!.trim() },
-        });
-      if (pending.role === UserRole.PATIENT)
-        await tx.patientProfile.create({
-          data: { tenantId: tenant.id, userId: u.id, fullName: name, email, phone, passwordHash: null, bornDate: parseBornDate(input.bornDate)! },
-        });
-
-      await tx.oauthAccount.create({
-        data: { tenantId: tenant.id, userId: u.id, provider: pending.provider, providerUserId: pending.providerUserId, email },
-      });
-
-      return u;
-    });
-
-    await this.prisma.oauthPending.delete({ where: { id: pending.id } });
-
-    const tokens = await this.issueTokens({
-      userId: created.id,
-      email,
-      role: created.role,
-      tenant,
-      twilioIdentity: created.twilioIdentity,
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-
-    return {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      user: {
-        id: created.id,
-        email,
-        name: created.name,
-        role: created.role,
-        phone,
-        tenantId: tenant.id,
-        tenantSlug: tenant.slug,
-        twilioIdentity: created.twilioIdentity,
       },
     };
   }
@@ -1050,70 +622,6 @@ export class AuthService {
         tenantId: tenant.id,
         tenantSlug: tenant.slug,
         twilioIdentity: existing.user.twilioIdentity,
-      },
-    };
-  }
-
-  async oauthSession(
-    input: { accessToken: string; ip?: string; userAgent?: string },
-    tenant: TenantContext,
-  ) {
-    if (!input.accessToken) throw new UnauthorizedException("Access token wajib diisi");
-
-    let payload: JwtPayload | null = null;
-    try {
-      payload = await this.jwt.verifyAsync<JwtPayload>(input.accessToken, {
-        secret: process.env.JWT_ACCESS_SECRET!,
-      });
-    } catch {
-      throw new UnauthorizedException("Access token invalid");
-    }
-
-    if (!payload?.sub) throw new UnauthorizedException("Access token invalid");
-    if (payload.tenantSlug !== tenant.slug) throw new UnauthorizedException("Token tenant mismatch");
-
-    const user = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) =>
-      tx.user.findUnique({ where: { id: payload!.sub } }),
-    );
-    if (!user || !user.isActive) throw new UnauthorizedException("Invalid token");
-
-    const profile = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) =>
-      this.getProfileByUserIdInTx(tx, user.id, user.role),
-    );
-    if (!profile) throw new UnauthorizedException("Profil user tidak ditemukan");
-
-    const tokens = await this.issueTokens({
-      userId: user.id,
-      email: profile.email,
-      role: user.role,
-      tenant,
-      twilioIdentity: user.twilioIdentity,
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-
-    await this.audit({
-      tenant,
-      userId: user.id,
-      email: profile.email,
-      action: AuthAction.LOGIN,
-      success: true,
-      ip: input.ip,
-      userAgent: input.userAgent,
-    });
-
-    return {
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      user: {
-        id: user.id,
-        email: profile.email,
-        name: user.name,
-        role: user.role,
-        phone: profile.phone,
-        tenantId: tenant.id,
-        tenantSlug: tenant.slug,
-        twilioIdentity: user.twilioIdentity,
       },
     };
   }
@@ -1362,7 +870,7 @@ export class AuthService {
     );
     if (!profile) throw new BadRequestException("Profil tidak ditemukan");
     if (!profile.passwordHash)
-      throw new BadRequestException("Akun OAuth tidak bisa mengganti email dengan cara ini");
+      throw new BadRequestException("Akun tanpa password tidak bisa mengganti email dengan cara ini");
 
     const passwordOk = await this.verifyPassword(input.password, profile.passwordHash);
     if (!passwordOk) throw new UnauthorizedException("Password salah");
@@ -1435,7 +943,7 @@ export class AuthService {
       this.findProfileByUserIdInTx(tx, userId),
     );
     if (!profile) throw new BadRequestException("Profil tidak ditemukan");
-    if (!profile.passwordHash) throw new BadRequestException("Akun OAuth tidak bisa menggunakan fitur ini");
+    if (!profile.passwordHash) throw new BadRequestException("Akun tanpa password tidak bisa menggunakan fitur ini");
 
     const verificationCode = randomVerificationCode(6);
     const codeHash = sha256(verificationCode);
