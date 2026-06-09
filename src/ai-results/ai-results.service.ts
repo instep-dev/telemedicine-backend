@@ -160,6 +160,7 @@ export class AiResultsService {
           transcriptRaw: item.transcriptRaw,
           aiStatus: item.aiStatus,
           aiError: item.aiError,
+          isFinalized: item.isFinalized,
           transcribedAt: item.transcribedAt,
           summarizedAt: item.summarizedAt,
           aiModel: item.aiModel,
