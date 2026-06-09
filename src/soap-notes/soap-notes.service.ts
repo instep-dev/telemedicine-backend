@@ -111,7 +111,7 @@ export class SoapNotesService {
     const updated = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       return tx.consultationNote.update({
         where: { id: note.id },
-        data: { isFinalized: true, finalizedAt: new Date() },
+        data: { isFinalized: true, finalizedAt: new Date(), aiStatus: 'SUCCESS' },
         include: NOTE_INCLUDE,
       });
     });

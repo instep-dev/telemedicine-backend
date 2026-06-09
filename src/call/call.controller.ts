@@ -55,8 +55,11 @@ export class CallController {
     @Query() query: GetCallsQueryDto,
     @CurrentTenant() tenant: TenantContext,
   ) {
+    if (req.user.role === UserRole.NURSE) {
+      return this.callService.findAllByNurse(req.user.id, query, tenant);
+    }
     if (req.user.role !== UserRole.DOCTOR) {
-      throw new ForbiddenException('Hanya dokter yang dapat melihat history call');
+      throw new ForbiddenException('Hanya dokter dan perawat yang dapat melihat history call');
     }
     return this.callService.findAllByDoctor(req.user.id, query, tenant);
   }

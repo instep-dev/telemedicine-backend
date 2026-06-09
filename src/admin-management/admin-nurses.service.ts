@@ -18,6 +18,13 @@ export class AdminNursesService {
     private readonly eventEmitter: EventEmitter2,
   ) {}
 
+  async countAll(tenantId: string, schemaName: string): Promise<{ total: number }> {
+    return this.prisma.withTenantSchema(schemaName, async (tx) => {
+      const total = await tx.nurseProfile.count({ where: { tenantId } });
+      return { total };
+    });
+  }
+
   async findAll(tenantId: string, schemaName: string, query: ListNursesQueryDto) {
     return this.prisma.withTenantSchema(schemaName, async (tx) => {
       const search = query.search?.trim().toLowerCase();
