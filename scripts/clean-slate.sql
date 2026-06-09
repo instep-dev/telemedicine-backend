@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════════════════════
--- CLEAN SLATE SCRIPT v3 — Database kosong total + SuperAdmin seed
+-- CLEAN SLATE SCRIPT v4 — Database kosong total + SuperAdmin seed
 -- Paste ke Neon SQL Editor → Run
 --
 -- Yang dilakukan script ini:
@@ -19,10 +19,18 @@
 -- PHASE 1: DROP EVERYTHING
 -- ─────────────────────────────────────────────────────────────────────────────
 
-DROP SCHEMA IF EXISTS tenant_dharmanugraha CASCADE;
-DROP SCHEMA IF EXISTS tenant_darramedika   CASCADE;
-DROP SCHEMA IF EXISTS tenant_counseling    CASCADE;
-DROP SCHEMA IF EXISTS tenant_demo_app      CASCADE;
+DO $$
+DECLARE
+  r RECORD;
+BEGIN
+  FOR r IN
+    SELECT schema_name FROM information_schema.schemata
+    WHERE schema_name LIKE 'tenant_%'
+  LOOP
+    EXECUTE 'DROP SCHEMA IF EXISTS ' || quote_ident(r.schema_name) || ' CASCADE';
+    RAISE NOTICE 'Dropped schema: %', r.schema_name;
+  END LOOP;
+END $$;
 
 DROP TABLE IF EXISTS public."SuperAdminRefreshToken" CASCADE;
 DROP TABLE IF EXISTS public."SuperAdmin"             CASCADE;
@@ -115,33 +123,6 @@ CREATE TABLE public.tenant_registry (
 CREATE INDEX tenant_registry_slug_idx   ON public.tenant_registry (slug);
 CREATE INDEX tenant_registry_status_idx ON public.tenant_registry (status);
 
-CREATE TABLE public."OAuthState" (
-  "id"          TEXT          PRIMARY KEY,
-  "tenantSlug"  TEXT          NOT NULL,
-  "provider"    public."OAuthProvider" NOT NULL,
-  "role"        public."UserRole"      NOT NULL,
-  "redirectUrl" TEXT,
-  "expiresAt"   TIMESTAMP(3)  NOT NULL,
-  "createdAt"   TIMESTAMP(3)  NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE INDEX "OAuthState_tenantSlug_idx" ON public."OAuthState"("tenantSlug");
-CREATE INDEX "OAuthState_expiresAt_idx"  ON public."OAuthState"("expiresAt");
-
-CREATE TABLE public."OAuthPending" (
-  "id"             TEXT PRIMARY KEY,
-  "tenantSlug"     TEXT NOT NULL,
-  "provider"       public."OAuthProvider" NOT NULL,
-  "role"           public."UserRole"      NOT NULL,
-  "providerUserId" TEXT NOT NULL,
-  "email"          TEXT NOT NULL,
-  "name"           TEXT,
-  "expiresAt"      TIMESTAMP(3) NOT NULL,
-  "createdAt"      TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-CREATE UNIQUE INDEX "OAuthPending_provider_providerUserId_tenantSlug_key"
-  ON public."OAuthPending"("provider","providerUserId","tenantSlug");
-CREATE INDEX "OAuthPending_email_idx"     ON public."OAuthPending"("email");
-CREATE INDEX "OAuthPending_expiresAt_idx" ON public."OAuthPending"("expiresAt");
 
 CREATE TABLE public."PendingRegistration" (
   "id"           TEXT PRIMARY KEY,
@@ -199,7 +180,7 @@ SET search_path TO public;
 
 DO $$
 BEGIN
-  RAISE NOTICE '=== CLEAN SLATE v3 SELESAI ===';
+  RAISE NOTICE '=== CLEAN SLATE v4 SELESAI ===';
   RAISE NOTICE 'SuperAdmin: it.development@instep.id / password123!';
   RAISE NOTICE 'Langkah selanjutnya:';
   RAISE NOTICE '  1. Deploy backend terbaru ke Railway';

@@ -63,7 +63,11 @@ export class SoapNotesService {
 
     this.assertAccess(note, userId, role);
 
-    if ((role === UserRole.PATIENT || role === UserRole.NURSE) && !note.isFinalized) {
+    if (role === UserRole.PATIENT) {
+      throw new ForbiddenException('Pasien tidak dapat mengakses hasil AI summary');
+    }
+
+    if (role === UserRole.NURSE && !note.isFinalized) {
       throw new ForbiddenException('Dokter belum memfinalisasi hasil konsultasi ini');
     }
 

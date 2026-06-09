@@ -572,9 +572,11 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     if (session.doctor.twilioIdentity) {
       participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Doctor';
     }
+    const patientName = session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
     const patientIdentity = `patient_${session.sessionId}_${session.patientId.slice(0, 8)}`;
-    participantNames[patientIdentity] =
-      session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
+    participantNames[patientIdentity] = patientName;
+    // Public/anonymous patient joins with a different identity format — map both to the same name
+    participantNames[`patient_${session.sessionId}_public`] = patientName;
     if (session.nurseId) {
       const nurseIdentity = `nurse_${session.sessionId}_${session.nurseId.slice(0, 8)}`;
       participantNames[nurseIdentity] = session.nurse?.name ?? 'Nurse';
@@ -730,9 +732,11 @@ export class TwilioService implements OnModuleInit, OnModuleDestroy {
     if (session.doctor?.twilioIdentity) {
       participantNames[session.doctor.twilioIdentity] = session.doctor.name ?? 'Doctor';
     }
+    const nursePatientName = session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
     const patientIdentity = `patient_${session.sessionId}_${session.patientId.slice(0, 8)}`;
-    participantNames[patientIdentity] =
-      session.patient?.patientProfile?.fullName ?? session.patient?.name ?? session.patientName ?? 'Patient';
+    participantNames[patientIdentity] = nursePatientName;
+    // Public/anonymous patient joins with a different identity format — map both
+    participantNames[`patient_${session.sessionId}_public`] = nursePatientName;
     const nurseIdentity = `nurse_${session.sessionId}_${nurseId.slice(0, 8)}`;
     participantNames[nurseIdentity] = session.nurse?.name ?? 'Nurse';
 

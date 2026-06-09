@@ -152,6 +152,17 @@ export class SuperAdminUsersService {
       const user = await tx.user.findFirst({ where: { id: userId, tenantId } });
       if (!user) throw new NotFoundException('User tidak ditemukan');
 
+      // Delete consultation notes first (RESTRICT FK: doctorId, patient_id)
+      await tx.consultationNote.deleteMany({
+        where: { OR: [{ patientId: userId }, { doctorId: userId }] },
+      });
+
+      // Delete consultation sessions (RESTRICT FK: patient_id, doctor_id, created_by)
+      // CASCADE will auto-delete: ConsultationNote, ConsultationSessionAudit, PatientReview
+      await tx.consultationSession.deleteMany({
+        where: { OR: [{ patientId: userId }, { doctorId: userId }, { createdBy: userId }] },
+      });
+
       await tx.user.delete({ where: { id: userId } });
       this.eventEmitter.emit(USER_LIST_CHANGED_EVENT);
       return { deleted: true, userId };

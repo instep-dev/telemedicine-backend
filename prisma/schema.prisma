@@ -542,35 +542,6 @@ model TenantRegistry {
   @@map("tenant_registry")
 }
 
-model OauthState {
-  id          String        @id @default(uuid())
-  tenantSlug  String
-  provider    OAuthProvider
-  role        UserRole
-  redirectUrl String?
-  expiresAt   DateTime
-  createdAt   DateTime      @default(now())
-
-  @@index([expiresAt])
-  @@map("OAuthState")
-}
-
-model OauthPending {
-  id             String        @id @default(uuid())
-  tenantSlug     String
-  provider       OAuthProvider
-  role           UserRole
-  providerUserId String
-  email          String
-  name           String?
-  expiresAt      DateTime
-  createdAt      DateTime      @default(now())
-
-  @@unique([provider, providerUserId, tenantSlug])
-  @@index([email])
-  @@index([expiresAt])
-  @@map("OAuthPending")
-}
 
 model PendingRegistration {
   id           String   @id @default(uuid())
