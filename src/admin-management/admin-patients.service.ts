@@ -11,10 +11,6 @@ export const PATIENT_LIST_CHANGED = 'patient.list.changed';
 const PAGE_SIZE = 30;
 const DEFAULT_PASSWORD = 'Password123!';
 
-function generateMrn(year: number, sequence: number): string {
-  return `MRN-${year}-${String(sequence).padStart(4, '0')}`;
-}
-
 @Injectable()
 export class AdminPatientsService {
   constructor(
@@ -90,19 +86,9 @@ export class AdminPatientsService {
       const phoneConflict = await tx.patientProfile.findFirst({ where: { phone: dto.phone.trim(), tenantId } });
       if (phoneConflict) throw new ConflictException(`Nomor telepon "${dto.phone.trim()}" sudah digunakan`);
 
-      // Handle MRN
-      let mrn = dto.mrn?.trim() || null;
-      if (!mrn) {
-        const year = new Date().getFullYear();
-        const count = await tx.patientProfile.count({ where: { tenantId } });
-        mrn = generateMrn(year, count + 1);
-        // Ensure uniqueness in case of collision
-        const mrnConflict = await tx.patientProfile.findFirst({ where: { mrn, tenantId } });
-        if (mrnConflict) mrn = generateMrn(year, count + 2);
-      } else {
-        const mrnConflict = await tx.patientProfile.findFirst({ where: { mrn, tenantId } });
-        if (mrnConflict) throw new ConflictException('MRN sudah digunakan');
-      }
+      const mrn = dto.mrn.trim();
+      const mrnConflict = await tx.patientProfile.findFirst({ where: { mrn, tenantId } });
+      if (mrnConflict) throw new ConflictException('MRN sudah digunakan');
 
       const userId = randomUUID();
       const hasAccount = !!dto.email;

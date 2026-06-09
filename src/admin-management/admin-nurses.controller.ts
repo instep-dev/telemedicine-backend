@@ -33,6 +33,11 @@ export class AdminNursesController {
   @OnEvent(NURSE_LIST_CHANGED)
   handleNurseListChanged() { this.listChanged$.next(); }
 
+  @Get('count')
+  countAll(@CurrentTenant() tenant: TenantContext) {
+    return this.service.countAll(tenant.id, tenant.schemaName);
+  }
+
   @Get()
   findAll(@CurrentTenant() tenant: TenantContext, @Query() query: ListNursesQueryDto) {
     return this.service.findAll(tenant.id, tenant.schemaName, query);

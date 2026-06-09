@@ -235,6 +235,104 @@ export class CallService {
     };
   }
 
+  async findAllByNurse(nurseId: string, query: GetCallsQueryDto, tenant: TenantContext) {
+    const limit = this.normalizeLimit(query.limit);
+    const cursor = query.cursor?.trim() || undefined;
+    const search = query.search?.trim() || undefined;
+    const sort = this.normalizeSort(query.sort);
+    const statusFilter = this.mapLegacyStatusFilter(query.status);
+
+    const orderBy =
+      sort === 'oldest'
+        ? [{ createdAt: 'asc' as const }, { sessionId: 'asc' as const }]
+        : [{ createdAt: 'desc' as const }, { sessionId: 'desc' as const }];
+
+    const whereClause: any = {
+      nurseId,
+      ...(statusFilter?.length ? { sessionStatus: { in: statusFilter } } : {}),
+      ...(search
+        ? {
+            OR: [
+              { sessionId: { contains: search, mode: 'insensitive' } },
+              { roomName: { contains: search, mode: 'insensitive' } },
+              { patientIdentity: { contains: search, mode: 'insensitive' } },
+              { patientName: { contains: search, mode: 'insensitive' } },
+              { doctor: { name: { contains: search, mode: 'insensitive' } } },
+              { patient: { name: { contains: search, mode: 'insensitive' } } },
+            ],
+          }
+        : {}),
+    };
+
+    if (cursor) {
+      const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+        return tx.consultationSession.findFirst({
+          where: { sessionId: cursor, nurseId },
+          select: { sessionId: true },
+        });
+      });
+      if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk nurse ini');
+    }
+
+    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      return tx.consultationSession.findMany({
+        where: whereClause,
+        take: limit + 1,
+        ...(cursor ? { cursor: { sessionId: cursor }, skip: 1 } : {}),
+        orderBy,
+        include: {
+          doctor: { select: { id: true, name: true } },
+          patient: { select: { id: true, name: true } },
+        },
+      });
+    });
+
+    const hasMore = rows.length > limit;
+    const items = hasMore ? rows.slice(0, limit) : rows;
+    const nextCursor = hasMore ? items[items.length - 1].sessionId : null;
+
+    return {
+      data: items.map((item) => ({
+        id: item.sessionId,
+        consultationId: item.sessionId,
+        doctorId: item.doctorId,
+        doctorName: item.doctor.name ?? null,
+        patientName: item.patientName ?? item.patient.name ?? null,
+        status: this.mapStatusToLegacy(item.sessionStatus),
+        roomSid: item.twilioRoomSid,
+        roomName: item.roomName,
+        doctorIdentity: item.doctorIdentity,
+        patientIdentity: item.patientIdentity,
+        startedAt: item.startedAt,
+        endedAt: item.endedAt,
+        recordingEnabled: item.recordingEnabled,
+        recordingStatus: item.recordingStatus,
+        recordingStartedAt: item.recordingStartedAt,
+        recordingCompletedAt: item.recordingCompletedAt,
+        compositionSid: item.compositionSid,
+        compositionStatus: item.compositionStatus,
+        compositionStartedAt: item.compositionStartedAt,
+        compositionReadyAt: item.compositionReadyAt,
+        mediaUrl: item.mediaUrl,
+        mediaFormat: item.mediaFormat,
+        durationSec: item.durationSec,
+        errorMessage: item.errorMessage,
+        consultationStatus: item.sessionStatus,
+        consultationStartedAt: item.startedAt,
+        consultationEndedAt: item.endedAt,
+        patientCity: item.patientCity,
+        patientProvince: item.patientProvince,
+        patientCountry: item.patientCountry,
+        patientCountryCode: item.patientCountryCode,
+        patientLatitude: item.patientLatitude,
+        patientLongitude: item.patientLongitude,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      })),
+      pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
+    };
+  }
+
   async getDailyStatistics(doctorId: string, query: GetCallStatsQueryDto, tenant: TenantContext) {
     const tzOffset = this.normalizeTzOffset(query.tzOffset);
 

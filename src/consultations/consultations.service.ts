@@ -805,11 +805,11 @@ export class ConsultationsService {
 
       const rows = await tx.doctorProfile.findMany({
         where: { license: { not: '' }, user: { isActive: true, role: UserRole.DOCTOR } },
-        select: { userId: true, fullName: true, email: true, phone: true, license: true },
+        select: { userId: true, fullName: true, email: true, phone: true, license: true, serviceCapability: true },
         orderBy: { fullName: 'asc' },
       });
 
-      return rows.map((item) => ({ userId: item.userId, fullName: item.fullName, email: item.email, phone: item.phone, license: item.license }));
+      return rows.map((item) => ({ userId: item.userId, fullName: item.fullName, email: item.email, phone: item.phone, license: item.license, serviceCapability: item.serviceCapability }));
     });
   }
 

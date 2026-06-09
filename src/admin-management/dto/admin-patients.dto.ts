@@ -6,7 +6,7 @@ export class CreatePatientDto {
   @IsString() @MinLength(5) @MaxLength(20) phone: string;
   @IsDateString() @IsOptional() bornDate?: string;
   @IsIn(['MALE', 'FEMALE']) @IsOptional() gender?: string;
-  @IsString() @IsOptional() mrn?: string;
+  @IsString() @MinLength(1) mrn: string;
   @IsString() @IsOptional() @MaxLength(500) address?: string;
 }
 

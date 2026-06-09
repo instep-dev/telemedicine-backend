@@ -31,12 +31,21 @@ export class AiResultsService {
   }
 
   private buildStatusBucketFilter(bucket?: string): any {
-    if (bucket === 'success') return { aiStatus: 'SUCCESS' };
+    if (bucket === 'success') {
+      // Finalized records are always success, regardless of aiStatus
+      return { OR: [{ aiStatus: 'SUCCESS' }, { isFinalized: true }] };
+    }
     if (bucket === 'failed') {
-      return { OR: [{ aiStatus: 'FAILED' }, { aiStatus: { contains: 'ERROR', mode: 'insensitive' } }] };
+      // Only unfinalized records with a failure status
+      return {
+        isFinalized: false,
+        OR: [{ aiStatus: 'FAILED' }, { aiStatus: { contains: 'ERROR', mode: 'insensitive' } }],
+      };
     }
     if (bucket === 'in-progress') {
+      // Not finalized, not success, not failed
       return {
+        isFinalized: false,
         OR: [
           { aiStatus: null },
           {
@@ -64,29 +73,33 @@ export class AiResultsService {
         ? [{ createdAt: 'asc' as const }, { id: 'asc' as const }]
         : [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
 
-    const whereClause: any = {
+    const baseWhere: any = {
       doctorId,
       consultationSession: { sessionStatus: 'COMPLETED' },
-      ...bucketFilter,
-      ...(search
-        ? {
-            OR: [
-              { summary: { contains: search, mode: 'insensitive' } },
-              { subjective: { contains: search, mode: 'insensitive' } },
-              { objective: { contains: search, mode: 'insensitive' } },
-              { assessment: { contains: search, mode: 'insensitive' } },
-              { plan: { contains: search, mode: 'insensitive' } },
-              { transcriptRaw: { contains: search, mode: 'insensitive' } },
-              { aiStatus: { contains: search, mode: 'insensitive' } },
-              { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { roomName: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { patientIdentity: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
-            ],
-          }
-        : {}),
     };
+
+    // Use AND to avoid OR collision when both bucket filter and search are active
+    const andConditions: any[] = [];
+    if (Object.keys(bucketFilter).length > 0) andConditions.push(bucketFilter);
+    if (search) {
+      andConditions.push({
+        OR: [
+          { summary: { contains: search, mode: 'insensitive' } },
+          { subjective: { contains: search, mode: 'insensitive' } },
+          { objective: { contains: search, mode: 'insensitive' } },
+          { assessment: { contains: search, mode: 'insensitive' } },
+          { plan: { contains: search, mode: 'insensitive' } },
+          { transcriptRaw: { contains: search, mode: 'insensitive' } },
+          { aiStatus: { contains: search, mode: 'insensitive' } },
+          { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { roomName: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { patientIdentity: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
+        ],
+      });
+    }
+    const whereClause: any = andConditions.length > 0 ? { ...baseWhere, AND: andConditions } : baseWhere;
 
     if (cursor) {
       const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
@@ -96,39 +109,49 @@ export class AiResultsService {
       if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk doctor ini');
     }
 
-    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
-      return tx.consultationNote.findMany({
-        where: whereClause,
-        take: limit + 1,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-        orderBy,
-        include: {
-          consultationSession: {
-            select: {
-              sessionId: true,
-              sessionStatus: true,
-              roomName: true,
-              patientName: true,
-              patientIdentity: true,
-              startedAt: true,
-              endedAt: true,
-              durationSec: true,
-              twilioRoomSid: true,
-              doctorIdentity: true,
-              consultationMode: true,
-              sessionType: true,
-              recordingStatus: true,
-              compositionStatus: true,
-              mediaUrl: true,
-              mediaFormat: true,
-              errorMessage: true,
-              createdAt: true,
-              updatedAt: true,
-              doctor: { select: { id: true, name: true } },
+    const { rows, totals } = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const [data, successCount, failedCount, inProgressCount, totalCount] = await Promise.all([
+        tx.consultationNote.findMany({
+          where: whereClause,
+          take: limit + 1,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          orderBy,
+          include: {
+            consultationSession: {
+              select: {
+                sessionId: true,
+                sessionStatus: true,
+                roomName: true,
+                patientName: true,
+                patientIdentity: true,
+                startedAt: true,
+                endedAt: true,
+                durationSec: true,
+                twilioRoomSid: true,
+                doctorIdentity: true,
+                consultationMode: true,
+                sessionType: true,
+                recordingStatus: true,
+                compositionStatus: true,
+                mediaUrl: true,
+                mediaFormat: true,
+                errorMessage: true,
+                createdAt: true,
+                updatedAt: true,
+                doctor: { select: { id: true, name: true } },
+              },
             },
           },
-        },
-      });
+        }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('success') } }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('failed') } }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('in-progress') } }),
+        tx.consultationNote.count({ where: baseWhere }),
+      ]);
+      return {
+        rows: data,
+        totals: { success: successCount, failed: failedCount, inProgress: inProgressCount, total: totalCount },
+      };
     });
 
     const hasMore = rows.length > limit;
@@ -179,6 +202,7 @@ export class AiResultsService {
         };
       }),
       pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
+      totals,
     };
   }
 
@@ -194,26 +218,27 @@ export class AiResultsService {
         ? [{ createdAt: 'asc' as const }, { id: 'asc' as const }]
         : [{ createdAt: 'desc' as const }, { id: 'desc' as const }];
 
-    const whereClause: any = {
-      consultationSession: { nurseId, sessionStatus: 'COMPLETED' },
-      ...bucketFilter,
-      ...(search
-        ? {
-            OR: [
-              { summary: { contains: search, mode: 'insensitive' } },
-              { subjective: { contains: search, mode: 'insensitive' } },
-              { objective: { contains: search, mode: 'insensitive' } },
-              { assessment: { contains: search, mode: 'insensitive' } },
-              { plan: { contains: search, mode: 'insensitive' } },
-              { transcriptRaw: { contains: search, mode: 'insensitive' } },
-              { aiStatus: { contains: search, mode: 'insensitive' } },
-              { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
-              { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
-            ],
-          }
-        : {}),
-    };
+    const baseWhere: any = { consultationSession: { nurseId, sessionStatus: 'COMPLETED' } };
+
+    const andConditions: any[] = [];
+    if (Object.keys(bucketFilter).length > 0) andConditions.push(bucketFilter);
+    if (search) {
+      andConditions.push({
+        OR: [
+          { summary: { contains: search, mode: 'insensitive' } },
+          { subjective: { contains: search, mode: 'insensitive' } },
+          { objective: { contains: search, mode: 'insensitive' } },
+          { assessment: { contains: search, mode: 'insensitive' } },
+          { plan: { contains: search, mode: 'insensitive' } },
+          { transcriptRaw: { contains: search, mode: 'insensitive' } },
+          { aiStatus: { contains: search, mode: 'insensitive' } },
+          { consultationSession: { sessionId: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { patientName: { contains: search, mode: 'insensitive' } } },
+          { consultationSession: { doctor: { name: { contains: search, mode: 'insensitive' } } } },
+        ],
+      });
+    }
+    const whereClause: any = andConditions.length > 0 ? { ...baseWhere, AND: andConditions } : baseWhere;
 
     if (cursor) {
       const cursorRow = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
@@ -225,39 +250,49 @@ export class AiResultsService {
       if (!cursorRow) throw new NotFoundException('Cursor tidak ditemukan untuk nurse ini');
     }
 
-    const rows = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
-      return tx.consultationNote.findMany({
-        where: whereClause,
-        take: limit + 1,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-        orderBy,
-        include: {
-          consultationSession: {
-            select: {
-              sessionId: true,
-              sessionStatus: true,
-              roomName: true,
-              patientName: true,
-              patientIdentity: true,
-              startedAt: true,
-              endedAt: true,
-              durationSec: true,
-              twilioRoomSid: true,
-              doctorIdentity: true,
-              consultationMode: true,
-              sessionType: true,
-              recordingStatus: true,
-              compositionStatus: true,
-              mediaUrl: true,
-              mediaFormat: true,
-              errorMessage: true,
-              createdAt: true,
-              updatedAt: true,
-              doctor: { select: { id: true, name: true } },
+    const { rows, totals } = await this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const [data, successCount, failedCount, inProgressCount, totalCount] = await Promise.all([
+        tx.consultationNote.findMany({
+          where: whereClause,
+          take: limit + 1,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+          orderBy,
+          include: {
+            consultationSession: {
+              select: {
+                sessionId: true,
+                sessionStatus: true,
+                roomName: true,
+                patientName: true,
+                patientIdentity: true,
+                startedAt: true,
+                endedAt: true,
+                durationSec: true,
+                twilioRoomSid: true,
+                doctorIdentity: true,
+                consultationMode: true,
+                sessionType: true,
+                recordingStatus: true,
+                compositionStatus: true,
+                mediaUrl: true,
+                mediaFormat: true,
+                errorMessage: true,
+                createdAt: true,
+                updatedAt: true,
+                doctor: { select: { id: true, name: true } },
+              },
             },
           },
-        },
-      });
+        }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('success') } }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('failed') } }),
+        tx.consultationNote.count({ where: { ...baseWhere, ...this.buildStatusBucketFilter('in-progress') } }),
+        tx.consultationNote.count({ where: baseWhere }),
+      ]);
+      return {
+        rows: data,
+        totals: { success: successCount, failed: failedCount, inProgress: inProgressCount, total: totalCount },
+      };
     });
 
     const hasMore = rows.length > limit;
@@ -287,6 +322,7 @@ export class AiResultsService {
         transcriptRaw: item.transcriptRaw,
         aiStatus: item.aiStatus,
         aiError: item.aiError,
+        isFinalized: item.isFinalized,
         transcribedAt: item.transcribedAt,
         summarizedAt: item.summarizedAt,
         aiModel: item.aiModel,
@@ -304,6 +340,7 @@ export class AiResultsService {
         updatedAt: item.updatedAt,
       })),
       pagination: { limit, nextCursor, hasMore, sort, search: search ?? null },
+      totals,
     };
   }
 
