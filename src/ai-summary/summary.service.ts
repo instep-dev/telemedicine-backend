@@ -17,23 +17,70 @@ export interface PromptConfig {
   plan: string;
 }
 
+const RESPONSE_SCHEMA = {
+  type: 'object',
+  properties: {
+    summary: {
+      type: 'string',
+      description: 'Ringkasan medis singkat dan padat dari konsultasi.',
+    },
+    subjective: {
+      type: 'string',
+      description: 'Bagian SOAP Subjective: keluhan, gejala, riwayat yang disampaikan pasien.',
+    },
+    objective: {
+      type: 'string',
+      description:
+        'Bagian SOAP Objective: temuan objektif, pemeriksaan, vital sign, observasi. Jika tidak ada, nyatakan tidak disebutkan.',
+    },
+    assessment: {
+      type: 'string',
+      description:
+        'Bagian SOAP Assessment: penilaian klinis berdasarkan transkrip. Jangan mengarang diagnosis yang tidak didukung.',
+    },
+    plan: {
+      type: 'string',
+      description:
+        'Bagian SOAP Plan: rencana terapi, edukasi, follow-up, instruksi. Jika tidak ada, nyatakan observasi/follow-up sesuai kondisi klinis.',
+    },
+  },
+  required: ['summary', 'subjective', 'objective', 'assessment', 'plan'],
+};
+
 @Injectable()
 export class SummaryService {
   private readonly logger = new Logger(SummaryService.name);
-  private readonly model = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
   private readonly ai: GoogleGenAI;
+
+  // Model chain: primary first, then fallbacks. Configurable via env.
+  // - Primary  : GEMINI_MODEL (default: gemini-2.5-flash)
+  // - Fallbacks: GEMINI_FALLBACK_MODELS (default: gemini-2.0-flash,gemini-1.5-flash)
+  private readonly modelChain: string[];
 
   constructor() {
     const apiKey = process.env.GEMINI_API_KEY;
-
     if (!apiKey) {
       throw new InternalServerErrorException('GEMINI_API_KEY is not set');
     }
-
     this.ai = new GoogleGenAI({ apiKey });
+
+    const primary = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+    const rawFallbacks =
+      process.env.GEMINI_FALLBACK_MODELS ?? 'gemini-2.0-flash,gemini-1.5-flash';
+    const fallbacks = rawFallbacks
+      .split(',')
+      .map((m) => m.trim())
+      .filter(Boolean);
+
+    // Deduplicate: primary always first, remove duplicates in fallbacks
+    this.modelChain = [primary, ...fallbacks.filter((m) => m !== primary)];
+    this.logger.log(`Model chain initialized: [${this.modelChain.join(' → ')}]`);
   }
 
-  async createMedicalSummary(transcript: string, config?: PromptConfig): Promise<SoapSummaryResult> {
+  async createMedicalSummary(
+    transcript: string,
+    config?: PromptConfig,
+  ): Promise<SoapSummaryResult> {
     const cleanTranscript = this.normalizeTranscript(transcript);
 
     if (!cleanTranscript) {
@@ -47,106 +94,154 @@ export class SummaryService {
     }
 
     const prompt = this.buildPrompt(cleanTranscript, config);
+    let lastError: any;
 
-    try {
-      const response = await this.withRetry(() => this.ai.models.generateContent({
-        model: this.model,
-        contents: prompt,
-        config: {
-          temperature: 0.2,
-          responseMimeType: 'application/json',
-          responseJsonSchema: {
-            type: 'object',
-            properties: {
-              summary: {
-                type: 'string',
-                description:
-                  'Ringkasan medis singkat dan padat dari konsultasi.',
-              },
-              subjective: {
-                type: 'string',
-                description:
-                  'Bagian SOAP Subjective: keluhan, gejala, riwayat yang disampaikan pasien.',
-              },
-              objective: {
-                type: 'string',
-                description:
-                  'Bagian SOAP Objective: temuan objektif, pemeriksaan, vital sign, observasi. Jika tidak ada, nyatakan tidak disebutkan.',
-              },
-              assessment: {
-                type: 'string',
-                description:
-                  'Bagian SOAP Assessment: penilaian klinis berdasarkan transkrip. Jangan mengarang diagnosis yang tidak didukung.',
-              },
-              plan: {
-                type: 'string',
-                description:
-                  'Bagian SOAP Plan: rencana terapi, edukasi, follow-up, instruksi. Jika tidak ada, nyatakan observasi/follow-up sesuai kondisi klinis.',
-              },
-            },
-            required: ['summary', 'subjective', 'objective', 'assessment', 'plan'],
-          },
-        },
-      }));
+    for (let modelIdx = 0; modelIdx < this.modelChain.length; modelIdx++) {
+      const model = this.modelChain[modelIdx];
+      const isLastModel = modelIdx === this.modelChain.length - 1;
 
-      const rawText = String(response.text || '').trim();
+      try {
+        const response = await this.withRetry(
+          () => this.callGemini(model, prompt),
+          4, // initial attempt + 3 retries per model
+          model,
+        );
 
-      if (!rawText) {
-        throw new Error('Empty Gemini response');
+        const rawText = String(response.text || '').trim();
+        if (!rawText) throw new Error('Empty Gemini response');
+
+        const parsed = this.safeJsonParse(rawText);
+
+        this.logger.log(`AI summary completed model=${model}`);
+
+        return {
+          summary: this.cleanField(
+            parsed.summary,
+            'Ringkasan konsultasi tidak berhasil dibuat.',
+          ),
+          subjective: this.cleanField(
+            parsed.subjective,
+            'Keluhan subjektif tidak cukup jelas pada transkrip.',
+          ),
+          objective: this.cleanField(
+            parsed.objective,
+            'Data objektif tidak disebutkan secara jelas pada transkrip.',
+          ),
+          assessment: this.cleanField(
+            parsed.assessment,
+            'Assessment definitif tidak dapat dibuat hanya dari transkrip.',
+          ),
+          plan: this.cleanField(
+            parsed.plan,
+            'Lanjutkan observasi gejala, edukasi pasien, dan follow-up sesuai kondisi klinis.',
+          ),
+        };
+      } catch (error: any) {
+        lastError = error;
+        const status = this.extractHttpStatus(error);
+        const isCapacityError = status === 503 || status === 429;
+
+        if (isCapacityError && !isLastModel) {
+          this.logger.warn(
+            `Model ${model} exhausted all retries (HTTP ${status}), switching to next model...`,
+          );
+          continue;
+        }
+
+        // Non-capacity error, or this was the last model — stop here
+        break;
       }
-
-      const parsed = this.safeJsonParse(rawText);
-
-      return {
-        summary: this.cleanField(
-          parsed.summary,
-          'Ringkasan konsultasi tidak berhasil dibuat.',
-        ),
-        subjective: this.cleanField(
-          parsed.subjective,
-          'Keluhan subjektif tidak cukup jelas pada transkrip.',
-        ),
-        objective: this.cleanField(
-          parsed.objective,
-          'Data objektif tidak disebutkan secara jelas pada transkrip.',
-        ),
-        assessment: this.cleanField(
-          parsed.assessment,
-          'Assessment definitif tidak dapat dibuat hanya dari transkrip.',
-        ),
-        plan: this.cleanField(
-          parsed.plan,
-          'Lanjutkan observasi gejala, edukasi pasien, dan follow-up sesuai kondisi klinis.',
-        ),
-      };
-    } catch (error: any) {
-      this.logger.error(
-        `Gemini summary failed model=${this.model} message=${error?.message || error}`,
-      );
-
-      throw new InternalServerErrorException(
-        `Gemini summary generation failed: ${error?.message || String(error)}`,
-      );
     }
+
+    this.logger.error(
+      `All models in chain failed. Last error: ${lastError?.message || lastError}`,
+    );
+    throw new InternalServerErrorException(
+      `Gemini summary generation failed: ${lastError?.message || String(lastError)}`,
+    );
   }
 
-  private async withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  // ─── Internal helpers ────────────────────────────────────────────────────────
+
+  private callGemini(model: string, prompt: string) {
+    return this.ai.models.generateContent({
+      model,
+      contents: prompt,
+      config: {
+        temperature: 0.2,
+        responseMimeType: 'application/json',
+        responseJsonSchema: RESPONSE_SCHEMA,
+      },
+    });
+  }
+
+  /**
+   * Retry with exponential backoff + jitter.
+   * Delays: ~1s → ~2s → ~4s (each ±25% jitter).
+   * Retries only on 503 (High Demand) and 429 (Rate Limit).
+   * Respects Retry-After header when present.
+   */
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    maxAttempts: number,
+    modelName: string,
+  ): Promise<T> {
     let lastError: any;
+
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
         return await fn();
       } catch (error: any) {
-        const status = error?.status ?? error?.response?.status;
+        const status = this.extractHttpStatus(error);
         const isRetryable = status === 503 || status === 429;
+
         if (!isRetryable || attempt === maxAttempts) throw error;
-        const delayMs = 2000 * attempt;
-        this.logger.warn(`Gemini ${status} attempt ${attempt}/${maxAttempts}, retrying in ${delayMs}ms`);
-        await new Promise((r) => setTimeout(r, delayMs));
+
+        const delayMs = this.calcDelay(attempt, error);
+        this.logger.warn(
+          `Gemini HTTP ${status} model=${modelName} attempt ${attempt}/${maxAttempts}, retry in ${delayMs}ms`,
+        );
+        await this.sleep(delayMs);
         lastError = error;
       }
     }
+
     throw lastError;
   }
+
+  /**
+   * Exponential backoff: base = 2^(attempt-1) seconds, capped at 30s.
+   * Jitter: ±25% so concurrent jobs don't all retry at the same time.
+   * Respects Retry-After header from Google if present.
+   */
+  private calcDelay(attempt: number, error: any): number {
+    const retryAfterHeader =
+      error?.response?.headers?.['retry-after'] ??
+      error?.headers?.['retry-after'];
+
+    if (retryAfterHeader && !isNaN(Number(retryAfterHeader))) {
+      return Math.min(Number(retryAfterHeader) * 1_000, 60_000);
+    }
+
+    const base = Math.min(Math.pow(2, attempt - 1) * 1_000, 30_000);
+    const jitter = base * 0.25 * (Math.random() * 2 - 1); // ±25%
+    return Math.max(500, Math.round(base + jitter));
+  }
+
+  private extractHttpStatus(error: any): number | null {
+    return (
+      error?.status ??
+      error?.response?.status ??
+      error?.httpStatusCode ??
+      null
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // ─── Prompt builder ───────────────────────────────────────────────────────────
 
   private buildPrompt(transcript: string, config?: PromptConfig): string {
     const isDAP = config?.templateType === 'DAP';
@@ -301,9 +396,11 @@ Transcript:
 ${transcript}`.trim();
   }
 
+  // ─── Utility ──────────────────────────────────────────────────────────────────
+
   private normalizeTranscript(text: string): string {
     return String(text || '')
-      .replace(/\u0000/g, '')
+      .replace(/ /g, '')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -317,17 +414,15 @@ ${transcript}`.trim();
         .replace(/^```\s*/i, '')
         .replace(/\s*```$/i, '')
         .trim();
-
       return JSON.parse(cleaned);
     }
   }
 
   private cleanField(value: unknown, fallback: string): string {
     const result = String(value ?? '')
-      .replace(/\u0000/g, '')
+      .replace(/ /g, '')
       .replace(/\s+/g, ' ')
       .trim();
-
     return result || fallback;
   }
 }
