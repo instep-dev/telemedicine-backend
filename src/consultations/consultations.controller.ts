@@ -94,6 +94,16 @@ export class ConsultationsController {
     return this.consultations.listAdminHistorySessions(req.user.id, query, tenant);
   }
 
+  @Get('sessions/doctor/history')
+  async listDoctorHistorySessions(
+    @Req() req: any,
+    @Query() query: ListConsultationSessionsQueryDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    this.requireRole(req.user.role, UserRole.DOCTOR);
+    return this.consultations.listDoctorHistorySessions(req.user.id, query, tenant);
+  }
+
   @Get('sessions/doctor')
   async listDoctorSessions(
     @Req() req: any,
@@ -112,6 +122,16 @@ export class ConsultationsController {
   ) {
     this.requireRole(req.user.role, UserRole.PATIENT);
     return this.consultations.listPatientSessions(req.user.id, query, tenant);
+  }
+
+  @Get('sessions/nurse/history')
+  async listNurseHistorySessions(
+    @Req() req: any,
+    @Query() query: ListConsultationSessionsQueryDto,
+    @CurrentTenant() tenant: TenantContext,
+  ) {
+    this.requireRole(req.user.role, UserRole.NURSE);
+    return this.consultations.listNurseHistorySessions(req.user.id, query, tenant);
   }
 
   @Get('sessions/nurse')

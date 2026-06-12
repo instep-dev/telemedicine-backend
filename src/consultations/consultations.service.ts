@@ -236,11 +236,13 @@ export class ConsultationsService {
       durationMinutes: s.durationMinutes,
       doctorId: s.doctorId,
       doctorName: this.getDoctorDisplayName(s),
+      doctorLicense: s.doctor?.doctorProfile?.license ?? null,
       patientId: s.patientId,
       patientName: this.getPatientDisplayName(s),
       patientMrn: s.patient.patientProfile?.mrn ?? null,
       nurseId: s.nurseId ?? null,
       nurseName: this.getNurseDisplayName(s),
+      nurseNurseId: s.nurse?.nurseProfile?.nurseId ?? null,
       createdBy: s.createdBy,
       createdByName: s.createdByAdmin.adminProfile?.fullName ?? s.createdByAdmin.name ?? null,
       doctorJoinedAt: s.doctorJoinedAt,
@@ -531,6 +533,56 @@ export class ConsultationsService {
     });
   }
 
+  async listDoctorHistorySessions(doctorId: string, query: ListConsultationSessionsQueryDto, tenant: TenantContext) {
+    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const doctor = await tx.user.findUnique({ where: { id: doctorId }, select: { id: true, role: true } });
+      if (!doctor) throw new ForbiddenException('Dokter tidak ditemukan');
+      this.assertRole(doctor.role, UserRole.DOCTOR);
+
+      const statusFilter = query.status
+        ? { sessionStatus: query.status }
+        : { sessionStatus: { in: [SessionStatus.COMPLETED, SessionStatus.FAILED] } };
+
+      const where = {
+        doctorId,
+        ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
+        ...statusFilter,
+        ...this.buildSearchClause(query.search),
+      };
+
+      const orderBy = this.normalizeSort(query.sort);
+
+      if (!query.limit) {
+        const rows = await tx.consultationSession.findMany({ where, orderBy, include: sessionWithProfilesInclude });
+        return rows.map((item) => this.mapSession(item));
+      }
+
+      const limit = query.limit;
+      const [rows, total] = await Promise.all([
+        tx.consultationSession.findMany({
+          where,
+          orderBy,
+          take: limit + 1,
+          skip: query.cursor ? 1 : 0,
+          cursor: query.cursor ? { sessionId: query.cursor } : undefined,
+          include: sessionWithProfilesInclude,
+        }),
+        tx.consultationSession.count({ where }),
+      ]);
+
+      const hasNextPage = rows.length > limit;
+      const data = hasNextPage ? rows.slice(0, limit) : rows;
+      const nextCursor = hasNextPage ? data[data.length - 1].sessionId : null;
+
+      return {
+        data: data.map((item) => this.mapSession(item)),
+        nextCursor,
+        hasNextPage,
+        total,
+      };
+    });
+  }
+
   async listDoctorSessions(doctorId: string, query: ListConsultationSessionsQueryDto, tenant: TenantContext) {
     return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
       const doctor = await tx.user.findUnique({ where: { id: doctorId }, select: { id: true, role: true } });
@@ -604,6 +656,56 @@ export class ConsultationsService {
         data: data.map((item) => this.mapSession(item)),
         nextCursor,
         hasNextPage,
+      };
+    });
+  }
+
+  async listNurseHistorySessions(nurseId: string, query: ListConsultationSessionsQueryDto, tenant: TenantContext) {
+    return this.prisma.withTenantSchema(tenant.schemaName, async (tx) => {
+      const nurse = await tx.user.findUnique({ where: { id: nurseId }, select: { id: true, role: true } });
+      if (!nurse) throw new ForbiddenException('Perawat tidak ditemukan');
+      this.assertRole(nurse.role, UserRole.NURSE);
+
+      const statusFilter = query.status
+        ? { sessionStatus: query.status }
+        : { sessionStatus: { in: [SessionStatus.COMPLETED, SessionStatus.FAILED] } };
+
+      const where = {
+        nurseId,
+        ...(query.date ? { scheduledDate: this.toJakartaDateOnly(query.date) } : {}),
+        ...statusFilter,
+        ...this.buildSearchClause(query.search),
+      };
+
+      const orderBy = this.normalizeSort(query.sort);
+
+      if (!query.limit) {
+        const rows = await tx.consultationSession.findMany({ where, orderBy, include: sessionWithProfilesInclude });
+        return rows.map((item) => this.mapSession(item));
+      }
+
+      const limit = query.limit;
+      const [rows, total] = await Promise.all([
+        tx.consultationSession.findMany({
+          where,
+          orderBy,
+          take: limit + 1,
+          skip: query.cursor ? 1 : 0,
+          cursor: query.cursor ? { sessionId: query.cursor } : undefined,
+          include: sessionWithProfilesInclude,
+        }),
+        tx.consultationSession.count({ where }),
+      ]);
+
+      const hasNextPage = rows.length > limit;
+      const data = hasNextPage ? rows.slice(0, limit) : rows;
+      const nextCursor = hasNextPage ? data[data.length - 1].sessionId : null;
+
+      return {
+        data: data.map((item) => this.mapSession(item)),
+        nextCursor,
+        hasNextPage,
+        total,
       };
     });
   }
